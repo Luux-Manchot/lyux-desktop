@@ -1,0 +1,5 @@
+# KDE & System Cache
+*.log
+.cache/
+Thumbs.db
+Desktop.ini

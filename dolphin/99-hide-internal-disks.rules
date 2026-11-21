@@ -1,0 +1,9 @@
+# Règle Udev LyuX : Masquer les disques et partitions internes du gestionnaire de fichiers Dolphin (Solid / UDisks2)
+# Les disques système internes (sda, nvme0n1, etc.) sont ignorés par l'interface utilisateur.
+# Seuls les périphériques amovibles (USB, cartes SD branchées par l'utilisateur) restent affichés.
+
+# Ignorer toutes les partitions internes fixes
+ENV{DEVTYPE}=="partition", ENV{ID_BUS}!="usb", ENV{UDISKS_IGNORE}="1"
+
+# Ignorer également les disques bruts internes
+ENV{DEVTYPE}=="disk", ENV{ID_BUS}!="usb", ENV{UDISKS_IGNORE}="1"

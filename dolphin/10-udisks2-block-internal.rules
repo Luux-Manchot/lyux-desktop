@@ -1,0 +1,9 @@
+// Règle Polkit LyuX : Interdire le montage/démontage de disques internes par les utilisateurs non-root
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.udisks2.filesystem-mount-system") === 0 ||
+        action.id.indexOf("org.freedesktop.udisks2.filesystem-unmount-others") === 0) {
+        if (!subject.isInGroup("sudo")) {
+            return polkit.Result.NO;
+        }
+    }
+});
