@@ -3,3 +3,6 @@
 .cache/
 Thumbs.db
 Desktop.ini
+
+# Build artifacts (ISOs, manifests de release)
+build/

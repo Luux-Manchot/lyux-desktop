@@ -5,7 +5,7 @@ Procédure opérationnelle, de l'ISO à la machine installée. Pour **construire
 ## 0. Prérequis
 
 - Le **serveur LyuX est allumé** et son API répond : `curl http://192.168.10.1:8000/api/v1/parc/status`. Sans lui, l'installateur refuse de continuer (les bâtiments et les salles viennent du serveur).
-- Une ISO `lyux-client-autonomous-installer.iso` produite dans `os-builder/lyux-iso-builder/output/`.
+- Une ISO `lyux-client-autonomous-installer.iso` produite dans `lyux-desktop/build/`.
 - Une VM (VirtualBox/Vagrant) ou une machine physique avec disque vierge, amorçage BIOS ou UEFI.
 
 ## 1. Démarrer l'installateur
@@ -68,7 +68,7 @@ Vérifications graphiques attendues : KDE Plasma verrouillé (Discover masqué),
 | :--- | :--- | :--- |
 | L'assistant boucle sur « serveur introuvable » | API `:8000` inaccessible ou IP probe incorrecte | Vérifier le serveur et le réseau `192.168.10.0/24` |
 | « Aucun fichier SquashFS trouvé » | ISO mal construite | Relancer `build-autonomous-iso.sh` puis `create-overlay-iso.sh` **dans cet ordre** |
-| « unsquashfs introuvable » | Overlay incomplet | Vérifier `zz-installer.squashfs` dans `output/` de l'ISO |
+| « unsquashfs introuvable » | Overlay incomplet | Vérifier `zz-installer.squashfs` dans `build/` de l'ISO |
 | Le poste ne boot pas après installation | GRUB ou UUID racine erroné | Réinstaller en vérifiant `grub-install` dans le log `/var/log/lyux-install.log` (sur le live) |
 | Le poste n'apparaît pas dans le parc | `POST /api/v1/parc/enroll` échoué | Vérifier le log d'installation et la connectivité vers `:8000` |
 
