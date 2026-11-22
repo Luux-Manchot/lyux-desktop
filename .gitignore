@@ -6,3 +6,8 @@ Desktop.ini
 
 # Build artifacts (ISOs, manifests de release)
 build/
+
+# Python & tests
+__pycache__/
+*.py[cod]
+.pytest_cache/
