@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Guide de Bienvenue LyuX
+Comment=Découvrir le système LyuX et vos outils
+Exec=/usr/bin/python3 /opt/lyux/apps/welcome/src/main.py
+Icon=help-about
+Terminal=false
+Categories=Utility;Education;
+StartupNotify=true
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,15 @@
+[Unit]
+Description=LyuX Automatic Machine Enrollment Assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/lyux/apps/enrollment/src/enroll.py
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

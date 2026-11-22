@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Signaler un problème
+Comment=Envoyer un ticket d'incident à l'équipe technique
+Exec=/usr/bin/python3 /opt/lyux/apps/report/src/main.py
+Icon=tools-report-bug
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
