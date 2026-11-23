@@ -4,6 +4,7 @@ import requests
 
 DEFAULT_TARGETS = [
     os.getenv("LYUX_SERVER_URL"),
+    "http://192.168.10.1:8000",
     "http://server.lyux.lan:8000",
     "http://serveur.lyux.lan:8000",
     "http://192.168.100.10:8000",

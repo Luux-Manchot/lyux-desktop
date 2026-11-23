@@ -2,6 +2,8 @@
 
 Ce sous-dossier regroupe toutes les configurations graphiques, thèmes et règles de sécurisation des postes clients sous **Debian 13 (Trixie) & KDE Plasma 6**.
 
+![Dock LyuX Desktop](docs/images/dock-desktop.png)
+
 ## 📘 Documentation
 
 - [Méthode de build du client](docs/METHODE_BUILD_CLIENT.md) — Debian + KDE, Ansible, capture master, overlay ISO, et où intégrer les anciens scripts de `client/`.

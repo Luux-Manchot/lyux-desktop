@@ -103,7 +103,7 @@ def run_enrollment(server_url: str, building_id: str, room_id: str, hostname: st
             "Activez l'option dans l'Admin Panel (Parc & Salles) avant d'enregistrer ce poste.",
             border_style="red"
         ))
-        sys.exit(1)
+        return False
     console.print("  [green]Autorisation confirmée : Enrôlement ouvert sur le serveur LyuX[/green]")
 
     # 2. Collecte matérielle
@@ -127,11 +127,11 @@ def run_enrollment(server_url: str, building_id: str, room_id: str, hostname: st
         resp = requests.post(f"{server_url}/api/v1/enroll/client-enroll", json=payload, timeout=10)
         if resp.status_code != 200:
             console.print(f"[bold red]Erreur d'enrôlement ({resp.status_code}) : {resp.text}[/bold red]")
-            sys.exit(1)
+            return False
         data = resp.json()
     except Exception as e:
         console.print(f"[bold red]Impossible de contacter le serveur LyuX : {e}[/bold red]")
-        sys.exit(1)
+        return False
 
     console.print(f"  [green]Enregistrement validé avec succès ![/green]")
     console.print(f"  • Nom d'ordinateur : [bold green]{hostname}[/bold green]")
@@ -165,68 +165,147 @@ def run_enrollment(server_url: str, building_id: str, room_id: str, hostname: st
         f"Affecté à la salle {room_id} ({building_id}). Le poste est prêt.",
         border_style="green"
     ))
+    return True
+
+
+def save_pending_config(server_url, building_id, room_id, hostname, is_teacher):
+    """Enregistre les réponses OOBE même si le serveur est encore indisponible."""
+    os.makedirs("/etc/lyux", exist_ok=True)
+    pending = {
+        "server_url": server_url,
+        "hostname": hostname,
+        "building_id": building_id,
+        "room_id": room_id,
+        "role": "prof" if is_teacher else "eleve",
+        "enrollment_pending": True,
+    }
+    with open("/etc/lyux/enrolled.json", "w", encoding="utf-8") as f:
+        json.dump(pending, f, indent=2, ensure_ascii=False)
+    console.print("  [dim]Configuration enregistrée localement dans /etc/lyux/enrolled.json[/dim]")
+
+
+FIRST_BOOT_FLAG = "/etc/lyux/first-boot.flag"
+ENROLLED_FILE = "/etc/lyux/enrolled.json"
+
+
+def load_pending_config():
+    try:
+        with open(ENROLLED_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def retry_pending_enrollment():
+    """Au boot suivant : retente l'enrôlement sans reposer les questions."""
+    cfg = load_pending_config()
+    if not cfg:
+        return False
+    console.print("[cyan]Reprise de l'enrôlement en attente...[/cyan]")
+    ok = run_enrollment(cfg["server_url"], cfg["building_id"], cfg["room_id"],
+                        cfg["hostname"], cfg.get("role") == "prof")
+    if ok:
+        cfg["enrollment_pending"] = False
+        with open(ENROLLED_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    return ok
+
+
+def force_admin_password_change():
+    """Remplace chage -d 0 : SDDM ne sait pas gérer un mot de passe expiré."""
+    console.print("\n[yellow]Sécurité : choisissez le mot de passe administrateur local.[/yellow]")
+    try:
+        subprocess.run(["passwd", "lyux-admin"], check=True)
+        console.print("  [green]Mot de passe administrateur mis à jour.[/green]")
+    except Exception as exc:
+        console.print(f"  [red]Changement de mot de passe impossible : {exc}[/red]")
+
 
 def interactive_mode():
-    console.print(Panel.fit("[bold cyan]Assistant d'enrôlement LyuX (Mode Interactif)[/bold cyan]", border_style="cyan"))
+    """Questions OOBE : elles sont posées même si le serveur n'est pas encore en ligne."""
+    if not os.path.exists(FIRST_BOOT_FLAG) and os.path.exists(ENROLLED_FILE):
+        retry_pending_enrollment()
+        return True
+
+    console.print(Panel.fit(
+        "[bold cyan]Assistant de configuration initial LyuX[/bold cyan]\n"
+        "[dim]Serveur • Bâtiment • Salle • Identité du poste[/dim]",
+        border_style="cyan"
+    ))
+
     found, disc_url, _ = discover_lyux_server()
-    default_url = disc_url if found else "http://127.0.0.1:8000"
+    default_url = disc_url or os.getenv("LYUX_SERVER_URL", "http://serveur.lyux.lan:8000")
     if found:
         console.print(f"  [green]Serveur LyuX découvert automatiquement : {default_url}[/green]")
+    else:
+        console.print("  [yellow]Aucun serveur détecté : saisissez son adresse (ex: http://serveur.lyux.lan:8000).[/yellow]")
 
+    # 1. Serveur : TOUJOURS demandé, en ligne ou non.
     server_url = Prompt.ask("Adresse du serveur LyuX", default=default_url).strip()
 
-    # Vérification enrôlement
-    if not check_server_enrollment_allowed(server_url):
+    allowed = check_server_enrollment_allowed(server_url)
+    if not allowed:
         console.print(Panel.fit(
-            "[bold red]ACCÈS REFUSÉ : L'enregistrement de nouveaux PC est actuellement désactivé sur le serveur.[/bold red]\n"
-            "Veuillez activer l'option 'Ajout de nouveaux PC' dans l'Admin Panel (Parc & Salles).",
-            border_style="red"
+            "[bold yellow]SERVEUR INJOIGNABLE OU ENRÔLEMENT VERROUILLÉ[/bold yellow]\n"
+            "Vous pouvez quand même choisir le bâtiment et la salle : la configuration\n"
+            "sera enregistrée localement et l'enrôlement sera retenté au prochain démarrage.",
+            border_style="yellow"
         ))
-        sys.exit(1)
 
-    # Sélection Bâtiment
+    # 2. Bâtiment : liste du serveur si disponible, sinon saisie libre.
     buildings = get_buildings(server_url)
-    if not buildings:
-        console.print("[bold red]Aucun bâtiment configuré sur le serveur LyuX.[/bold red]")
-        sys.exit(1)
+    if buildings:
+        console.print("\n[bold]Bâtiments disponibles :[/bold]")
+        for idx, b in enumerate(buildings, 1):
+            console.print(f"  [{idx}] {b['name']} ([dim]{b['id']}[/dim])")
+        b_choice = Prompt.ask("Numéro du bâtiment",
+                              choices=[str(i) for i in range(1, len(buildings) + 1)], default="1")
+        building_id = buildings[int(b_choice) - 1]["id"]
+    else:
+        building_id = Prompt.ask("Identifiant du bâtiment (ex: BAT-C)", default="BAT-C").strip()
 
-    console.print("\n[bold]Bâtiments disponibles :[/bold]")
-    for idx, b in enumerate(buildings, 1):
-        console.print(f"  [{idx}] {b['name']} ([dim]{b['id']}[/dim])")
-    
-    b_choice = Prompt.ask("Sélectionnez le numéro du bâtiment", choices=[str(i) for i in range(1, len(buildings)+1)], default="1")
-    selected_building = buildings[int(b_choice) - 1]
-    building_id = selected_building["id"]
-
-    # Sélection Salle
+    # 3. Salle : idem.
     rooms = get_rooms(server_url, building_id)
-    if not rooms:
-        console.print(f"[bold red]Aucune salle disponible dans le bâtiment {selected_building['name']}.[/bold red]")
-        sys.exit(1)
+    if rooms:
+        console.print("\n[bold]Salles disponibles :[/bold]")
+        for idx, r in enumerate(rooms, 1):
+            console.print(f"  [{idx}] {r['name']} ([dim]{r['id']}[/dim])")
+        r_choice = Prompt.ask("Numéro de la salle",
+                              choices=[str(i) for i in range(1, len(rooms) + 1)], default="1")
+        room_id = rooms[int(r_choice) - 1]["id"]
+    else:
+        room_id = Prompt.ask("Identifiant de la salle (ex: C14)", default="C14").strip()
 
-    console.print(f"\n[bold]Salles du {selected_building['name']} :[/bold]")
-    for idx, r in enumerate(rooms, 1):
-        console.print(f"  [{idx}] {r['name']} ([dim]{r['id']}[/dim])")
-    
-    r_choice = Prompt.ask("Sélectionnez le numéro de la salle", choices=[str(i) for i in range(1, len(rooms)+1)], default="1")
-    selected_room = rooms[int(r_choice) - 1]
-    room_id = selected_room["id"]
-
-    # Suggestion automatique du nom d'hôte
+    # 4. Identité du poste.
     suggested = get_suggested_hostname(server_url, room_id, building_id)
-    console.print(f"\n[cyan]Nom suggéré automatiquement : [bold]{suggested}[/bold][/cyan]")
-    hostname = Prompt.ask("Nom de l'ordinateur (doit être unique)", default=suggested).strip()
-
-    while not check_hostname_available(server_url, hostname):
-        console.print(f"[bold red]Le nom '{hostname}' est déjà pris par un autre PC ![/bold red]")
-        hostname = Prompt.ask("Veuillez choisir un autre nom d'ordinateur").strip()
-
+    hostname = Prompt.ask("Nom de l'ordinateur", default=suggested).strip()
     is_teacher = Confirm.ask("S'agit-il du poste enseignant principal de la salle ?", default=False)
-    run_enrollment(server_url, building_id, room_id, hostname, is_teacher)
+
+    force_admin_password_change()
+    save_pending_config(server_url, building_id, room_id, hostname, is_teacher)
+
+    if allowed and run_enrollment(server_url, building_id, room_id, hostname, is_teacher):
+        try:
+            os.remove(FIRST_BOOT_FLAG)
+        except Exception:
+            pass
+        return True
+
+    console.print(Panel.fit(
+        f"[bold yellow]Configuration enregistrée pour {hostname} ({building_id} / {room_id}).[/bold yellow]\n"
+        "Le poste réessaiera son enrôlement au prochain démarrage.",
+        border_style="yellow"
+    ))
+    try:
+        os.remove(FIRST_BOOT_FLAG)
+    except Exception:
+        pass
+    return True
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LyuX Machine Enrollment Tool")
-    parser.add_argument("--server", help="URL du serveur LyuX (ex: http://192.168.10.1:8000)")
+    parser.add_argument("--server", help="URL du serveur LyuX (ex: http://serveur.lyux.lan:8000)")
     parser.add_argument("--building", help="Identifiant du bâtiment (ex: BAT-C)")
     parser.add_argument("--room", help="Identifiant de la salle (ex: C14)")
     parser.add_argument("--hostname", help="Nom unique de la machine (ex: C14-PC03)")
@@ -235,6 +314,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.server and args.building and args.room and args.hostname:
-        run_enrollment(args.server, args.building, args.room, args.hostname, args.teacher)
+        if not run_enrollment(args.server, args.building, args.room, args.hostname, args.teacher):
+            sys.exit(1)
     else:
         interactive_mode()

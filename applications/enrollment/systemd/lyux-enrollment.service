@@ -1,14 +1,20 @@
 [Unit]
-Description=LyuX Automatic Machine Enrollment Assistant
+Description=LyuX First-Boot Setup (serveur, batiment, salle, compte admin)
 After=network-online.target
 Wants=network-online.target
+Before=display-manager.service sddm.service
+Conflicts=getty@tty1.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/lyux/apps/enrollment/src/enroll.py
+# Chaque carte sans IP reçoit un bail DHCP avant la découverte du serveur.
+ExecStartPre=/bin/bash /opt/lyux/apps/enrollment/scripts/lyux-net-setup.sh
+# tee garde les questions visibles sur tty1 et trace la session pour le support.
+ExecStart=/bin/sh -c '/usr/bin/python3 /opt/lyux/apps/enrollment/src/enroll.py 2>&1 | tee -a /var/log/lyux-oobe.log'
 StandardInput=tty
 StandardOutput=tty
 TTYPath=/dev/tty1
+TTYVHangup=yes
 RemainAfterExit=yes
 
 [Install]
