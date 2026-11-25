@@ -51,3 +51,18 @@ class TestFeature12_CalamaresOEMInstaller:
         """12.5 Vérifie la présence de l'interface graphique First-Boot (oobe_gui.py)"""
         oobe_file = paths["enrollment"] / "src" / "oobe_gui.py"
         assert oobe_file.exists()
+
+    def test_oobe_service_launches_graphical_interface(self, paths):
+        """Le premier démarrage lance la GUI au lieu du prompt CLI."""
+        srv = paths["enrollment"] / "systemd" / "lyux-enrollment.service"
+        content = srv.read_text(encoding="utf-8")
+        assert "src/oobe_gui.py" in content
+        assert "src/enroll.py" not in content
+
+    def test_oobe_cannot_continue_when_server_is_unreachable(self, paths):
+        """Bâtiment, salle et configuration locale restent bloqués hors ligne."""
+        gui = (paths["enrollment"] / "src" / "oobe_gui.py").read_text(encoding="utf-8")
+        cli = (paths["enrollment"] / "src" / "enroll.py").read_text(encoding="utf-8")
+        assert "Mode simulation local" not in gui
+        assert "vous pouvez quand même choisir" not in cli.lower()
+        assert "    save_pending_config(" not in cli

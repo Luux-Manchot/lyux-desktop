@@ -16,7 +16,7 @@ from PyQt6.QtGui import QFont, QIcon, QPixmap
 from role_detector import get_current_user_info
 
 
-def make_card(icon_name: str, title: str, description: str, badge_text: str = None, accent_color: str = "#2563EB") -> QFrame:
+def make_card(icon_name: str, title: str, description: str, badge_text: str = None, accent_color: str = "#2563EB") -> QFrame: # type: ignore
     """Crée une carte visuelle claire et moderne avec une icône Breeze."""
     card = QFrame()
     card.setStyleSheet(f"""
@@ -555,7 +555,7 @@ class LyuxWelcomeWindow(QMainWindow):
         is_last = (index == self.stacked_widget.count() - 1)
 
         if is_last:
-            self.next_btn.setText("Commencer à travailler 🚀")
+            self.next_btn.setText("Commencer à travailler")
             self.next_btn.setIcon(QIcon())
             # Requiert que la charte soit acceptée
             self.next_btn.setEnabled(self.rules_checkbox.isChecked())

@@ -4,7 +4,7 @@ Veyon Manager — Module de supervision pédagogique et gestion réseau Veyon (L
 Opération Manchot — Milestone 4 (Features 17, 18, 19, 20)
 
 Gère :
-- L'inventaire officiel des salles pilotes (B204 et S102)
+- L'inventaire officiel des salles pilotes (B24 et S12)
 - La vérification des clefs asymétriques RSA (teacher/key)
 - La vérification de connectivité des ports réseau (11100, 11200, 11400)
 - L'exécution des actions de supervision (verrouillage, déverrouillage, message)
@@ -23,24 +23,24 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 PILOT_ROOMS: Dict[str, Dict[str, Any]] = {
-    "B204": {
-        "name": "Salle B204 (1G1 NSI / Maths)",
+    "B24": {
+        "name": "Salle B24 (1G1 NSI / Maths)",
         "profile": "nsi",
         "capacity": 24,
         "teacher": "thomas.durand",
         "teacher_name": "M. Thomas Durand",
-        "teacher_host": "b204-prof",
+        "teacher_host": "b24-prof",
         "teacher_ip": "192.168.100.20",
         "students": [
             {
-                "hostname": "b204-pc01",
+                "hostname": "b24-pc01",
                 "ip": "192.168.100.21",
                 "user": "lucas.martin",
                 "full_name": "Lucas Martin",
                 "app": "Thonny IDE"
             },
             {
-                "hostname": "b204-pc02",
+                "hostname": "b24-pc02",
                 "ip": "192.168.100.22",
                 "user": "emma.bernard",
                 "full_name": "Emma Bernard",
@@ -48,24 +48,24 @@ PILOT_ROOMS: Dict[str, Dict[str, Any]] = {
             }
         ]
     },
-    "S102": {
-        "name": "Salle S102 (1G2 Sciences)",
+    "S12": {
+        "name": "Salle S12 (1G2 Sciences)",
         "profile": "sciences",
         "capacity": 24,
         "teacher": "sophie.leroy",
         "teacher_name": "Mme Sophie Leroy",
-        "teacher_host": "s102-prof",
+        "teacher_host": "s12-prof",
         "teacher_ip": "192.168.100.30",
         "students": [
             {
-                "hostname": "s102-pc01",
+                "hostname": "s12-pc01",
                 "ip": "192.168.100.31",
                 "user": "hugo.dubois",
                 "full_name": "Hugo Dubois",
                 "app": "Avogadro 3D"
             },
             {
-                "hostname": "s102-pc02",
+                "hostname": "s12-pc02",
                 "ip": "192.168.100.32",
                 "user": "lea.thomas",
                 "full_name": "Léa Thomas",

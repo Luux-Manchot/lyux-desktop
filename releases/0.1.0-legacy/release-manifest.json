@@ -1,0 +1,15 @@
+{
+  "schema": "lyux-release-manifest",
+  "schema_version": 1,
+  "version": "0.1.0-legacy",
+  "channel": "beta",
+  "prerelease": true,
+  "published_at": "2026-11-25T20:27:45+00:00",
+  "components": {
+    "lyux_desktop": "0.1.0-legacy",
+    "lyux_server": "0.5.0-beta.1",
+    "os_builder": "0.5.0-beta.1"
+  },
+  "iso": null,
+  "notes": "Archive historique de la premiere ISO autonome (anciennement v1.0.0 dans lyux-os-builder)"
+}

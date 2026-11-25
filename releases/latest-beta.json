@@ -1,0 +1,19 @@
+{
+  "schema": "lyux-release-manifest",
+  "schema_version": 1,
+  "version": "0.5.0-beta.1",
+  "channel": "beta",
+  "prerelease": true,
+  "published_at": "2026-11-25T20:33:59+00:00",
+  "components": {
+    "lyux_desktop": "0.5.0-beta.1",
+    "lyux_server": "0.5.0-beta.1",
+    "os_builder": "0.5.0-beta.1"
+  },
+  "iso": {
+    "filename": "lyux-desktop-0.5.0-beta.1.iso",
+    "sha256": "dc6cc103cab1fd0664414153f3e73fae2b9d746ca0041f9cb1a3d8feeceb546b",
+    "size_bytes": 1056516096
+  },
+  "notes": "Release beta LyuX 0.5.0-beta.1"
+}

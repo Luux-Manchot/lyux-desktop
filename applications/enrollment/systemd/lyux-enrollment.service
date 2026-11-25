@@ -1,21 +1,21 @@
 [Unit]
-Description=LyuX First-Boot Setup (serveur, batiment, salle, compte admin)
-After=network-online.target
+Description=LyuX First-Boot OOBE Setup (serveur, batiment, salle, compte admin)
+After=network-online.target systemd-user-sessions.service
 Wants=network-online.target
 Before=display-manager.service sddm.service
 Conflicts=getty@tty1.service
+ConditionPathExists=/etc/lyux/first-boot.flag
 
 [Service]
 Type=oneshot
 # Chaque carte sans IP reçoit un bail DHCP avant la découverte du serveur.
 ExecStartPre=/bin/bash /opt/lyux/apps/enrollment/scripts/lyux-net-setup.sh
-# tee garde les questions visibles sur tty1 et trace la session pour le support.
-ExecStart=/bin/sh -c '/usr/bin/python3 /opt/lyux/apps/enrollment/src/enroll.py 2>&1 | tee -a /var/log/lyux-oobe.log'
+ExecStart=/usr/bin/xinit /bin/bash /opt/lyux/apps/enrollment/scripts/lyux-oobe-session.sh /opt/lyux/apps/enrollment/src/oobe_gui.py -- :0 vt1 -nolisten tcp
 StandardInput=tty
-StandardOutput=tty
+StandardOutput=journal+console
+StandardError=journal+console
 TTYPath=/dev/tty1
-TTYVHangup=yes
-RemainAfterExit=yes
+RemainAfterExit=no
 
 [Install]
 WantedBy=multi-user.target

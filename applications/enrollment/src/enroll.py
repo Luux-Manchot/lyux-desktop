@@ -30,9 +30,15 @@ except ImportError:
     get_hardware_fingerprint = lambda: {"mac_address": "52:54:00:12:34:56", "serial_number": "SN-DEMO", "cpu_info": "x86_64", "ram_mb": 4096}
 
 try:
-    from discovery import discover_lyux_server
+    from enrollment_client import (
+        FIRST_BOOT_FLAG as _CLIENT_FB_FLAG,
+        ENROLLED_FILE as _CLIENT_ENROLLED_FILE,
+        load_state,
+        perform_enrollment,
+        save_state,
+    )
 except ImportError:
-    discover_lyux_server = lambda: (False, "http://127.0.0.1:8000", {})
+    perform_enrollment = None
 
 console = Console(highlight=False)
 
@@ -94,94 +100,32 @@ def run_enrollment(server_url: str, building_id: str, room_id: str, hostname: st
         border_style="cyan"
     ))
 
-    # 1. Vérification du verrou d'enrôlement sur le serveur
-    console.print("\n[yellow]Étape 1/4 : Vérification des autorisations sur le serveur...[/yellow]")
-    if not check_server_enrollment_allowed(server_url):
-        console.print(Panel.fit(
-            "[bold red]ACCÈS REFUSÉ : L'enregistrement de nouveaux PC est actuellement désactivé.[/bold red]\n"
-            "L'administrateur a verrouillé l'enrôlement dans les Paramètres Généraux du serveur LyuX.\n"
-            "Activez l'option dans l'Admin Panel (Parc & Salles) avant d'enregistrer ce poste.",
-            border_style="red"
-        ))
-        return False
-    console.print("  [green]Autorisation confirmée : Enrôlement ouvert sur le serveur LyuX[/green]")
-
-    # 2. Collecte matérielle
-    console.print("\n[yellow]Étape 2/4 : Collecte des caractéristiques de la machine...[/yellow]")
-    hw = get_hardware_fingerprint()
-    console.print(f"  • Adresse MAC : [bold]{hw['mac_address']}[/bold]")
-    console.print(f"  • Mémoire RAM : [bold]{hw['ram_mb']} Mo[/bold]")
-
-    # 3. Enregistrement auprès de l'API
-    console.print(f"\n[yellow]Étape 3/4 : Enregistrement sur le serveur ({server_url})...[/yellow]")
-    payload = {
-        "hostname": hostname,
-        "building_id": building_id,
-        "room_id": room_id,
-        "mac_address": hw["mac_address"],
-        "ip_address": "",
-        "role": "prof" if is_teacher else "eleve"
-    }
-
-    try:
-        resp = requests.post(f"{server_url}/api/v1/enroll/client-enroll", json=payload, timeout=10)
-        if resp.status_code != 200:
-            console.print(f"[bold red]Erreur d'enrôlement ({resp.status_code}) : {resp.text}[/bold red]")
+    if perform_enrollment is not None:
+        role = "prof" if is_teacher else "eleve"
+        res = perform_enrollment(server_url, building_id, room_id, hostname, role=role)
+        if not res.get("ok"):
+            console.print(f"[bold red]{res.get('detail', 'Enrôlement refusé')}[/bold red]")
             return False
-        data = resp.json()
-    except Exception as e:
-        console.print(f"[bold red]Impossible de contacter le serveur LyuX : {e}[/bold red]")
-        return False
-
-    console.print(f"  [green]Enregistrement validé avec succès ![/green]")
-    console.print(f"  • Nom d'ordinateur : [bold green]{hostname}[/bold green]")
-    console.print(f"  • Bâtiment         : [bold]{building_id}[/bold]")
-    console.print(f"  • Salle            : [bold magenta]{room_id}[/bold magenta]")
-
-    # 4. Application du nom d'hôte local
-    console.print("\n[yellow]Étape 4/4 : Application de l'identité système locale...[/yellow]")
-    try:
-        subprocess.run(["hostnamectl", "set-hostname", hostname], check=True)
-        console.print(f"  • Nom d'hôte appliqué : {hostname}")
-    except Exception:
-        console.print(f"  (Simulation d'hôte : nom d'hôte virtuel = {hostname})")
-
-    # Clôture locale
-    try:
-        os.makedirs("/etc/lyux", exist_ok=True)
-        with open("/etc/lyux/enrolled.json", "w", encoding="utf-8") as f:
-            json.dump({
-                "hostname": hostname,
-                "building_id": building_id,
-                "room_id": room_id,
-                "role": "prof" if is_teacher else "eleve"
-            }, f, indent=2)
-        subprocess.run(["systemctl", "disable", "lyux-enrollment.service"], check=False)
-    except Exception:
-        pass
-
-    console.print(Panel.fit(
-        f"[bold green]Enrôlement terminé avec succès pour {hostname} ![/bold green]\n"
-        f"Affecté à la salle {room_id} ({building_id}). Le poste est prêt.",
-        border_style="green"
-    ))
-    return True
+        console.print(Panel.fit(
+            f"[bold green]Enrôlement terminé avec succès pour {hostname} ![/bold green]\n"
+            f"Affecté à la salle {room_id} ({building_id}). Le poste est prêt.",
+            border_style="green"
+        ))
+        return True
+    return False
 
 
 def save_pending_config(server_url, building_id, room_id, hostname, is_teacher):
-    """Enregistre les réponses OOBE même si le serveur est encore indisponible."""
-    os.makedirs("/etc/lyux", exist_ok=True)
-    pending = {
-        "server_url": server_url,
-        "hostname": hostname,
-        "building_id": building_id,
-        "room_id": room_id,
-        "role": "prof" if is_teacher else "eleve",
-        "enrollment_pending": True,
-    }
-    with open("/etc/lyux/enrolled.json", "w", encoding="utf-8") as f:
-        json.dump(pending, f, indent=2, ensure_ascii=False)
-    console.print("  [dim]Configuration enregistrée localement dans /etc/lyux/enrolled.json[/dim]")
+    """Enregistre uniquement l'état local en attente sans créer enrolled.json avant autorisation."""
+    save_state(
+        "pending",
+        server_url=server_url,
+        building_id=building_id,
+        room_id=room_id,
+        role="prof" if is_teacher else "eleve",
+        hostname=hostname,
+    )
+    console.print("  [dim]État d'attente enregistré dans /var/lib/lyux/enrollment-state.json[/dim]")
 
 
 FIRST_BOOT_FLAG = "/etc/lyux/first-boot.flag"
@@ -243,14 +187,28 @@ def interactive_mode():
     # 1. Serveur : TOUJOURS demandé, en ligne ou non.
     server_url = Prompt.ask("Adresse du serveur LyuX", default=default_url).strip()
 
-    allowed = check_server_enrollment_allowed(server_url)
-    if not allowed:
+    try:
+        probe = requests.get(f"{server_url}/health", timeout=5)
+        server_reachable = probe.status_code == 200
+    except Exception as exc:
+        server_reachable = False
+        reach_error = str(exc)
+
+    if not server_reachable:
         console.print(Panel.fit(
-            "[bold yellow]SERVEUR INJOIGNABLE OU ENRÔLEMENT VERROUILLÉ[/bold yellow]\n"
-            "Vous pouvez quand même choisir le bâtiment et la salle : la configuration\n"
-            "sera enregistrée localement et l'enrôlement sera retenté au prochain démarrage.",
-            border_style="yellow"
+            "[bold red]SERVEUR INJOIGNABLE[/bold red]\n"
+            f"Impossible de joindre {server_url}. Vérifiez l'adresse et le réseau.{' Cause : ' + reach_error if 'reach_error' in locals() else ''}",
+            border_style="red"
         ))
+        return False
+
+    if not check_server_enrollment_allowed(server_url):
+        console.print(Panel.fit(
+            "[bold red]ENRÔLEMENT VERROUILLÉ[/bold red]\n"
+            "Activez l'option d'enrôlement dans le panneau Parc & Salles du serveur.",
+            border_style="red"
+        ))
+        return False
 
     # 2. Bâtiment : liste du serveur si disponible, sinon saisie libre.
     buildings = get_buildings(server_url)
@@ -282,9 +240,8 @@ def interactive_mode():
     is_teacher = Confirm.ask("S'agit-il du poste enseignant principal de la salle ?", default=False)
 
     force_admin_password_change()
-    save_pending_config(server_url, building_id, room_id, hostname, is_teacher)
 
-    if allowed and run_enrollment(server_url, building_id, room_id, hostname, is_teacher):
+    if run_enrollment(server_url, building_id, room_id, hostname, is_teacher):
         try:
             os.remove(FIRST_BOOT_FLAG)
         except Exception:

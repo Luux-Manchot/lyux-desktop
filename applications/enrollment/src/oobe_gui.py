@@ -1,83 +1,80 @@
 #!/usr/bin/env python3
 """
-LyuX OOBE (Out-Of-Box Experience) — Assistant de Premier Démarrage Rapide
-Style Windows 11 / macOS Setup moderne :
-- Étape 1 : Langue & Clavier (Options par défaut modifiables)
-- Étape 2 : Détection auto ou saisie URL Serveur LyuX
-- Étape 3 : Salle / Classe & Rôle (Élève / Prof)
-- Étape 4 : Installation automatique des dépendances & config
-- Étape 5 : Transition immédiate vers l'écran de connexion multi-comptes
+LyuX OOBE (Out-Of-Box Experience) — Assistant de Premier Démarrage
+Thème clair moderne, sans emojis, avec placeholder texte "LOGO" (voir issue #27).
+Écrans :
+  1. Connexion & autorisation Serveur LyuX
+  2. Affectation Bâtiment / Salle / Rôle / Nom attribué par le serveur
+  3. Enrôlement idempotent & passage à SDDM
 """
 
-import sys
 import os
+import sys
 import time
+from pathlib import Path
+
 import requests
+from PyQt6.QtCore import Qt, QThread, QTimer, QSize, pyqtSignal
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QLineEdit, QComboBox, QStackedWidget,
-    QFrame, QGridLayout, QProgressBar, QMessageBox, QRadioButton,
-    QButtonGroup, QScrollArea
+    QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QColor
-
-import subprocess
 
 try:
-    from hardware import get_hardware_fingerprint
+    from discovery import validate_server_url
 except ImportError:
-    try:
-        from .hardware import get_hardware_fingerprint
-    except Exception:
-        get_hardware_fingerprint = lambda: {"mac_address": "52:54:00:12:34:56", "serial_number": "SN-123456", "cpu_info": "CPU x86_64", "ram_mb": 4096}
+    from .discovery import validate_server_url
 
 try:
-    from discovery import discover_lyux_server
+    from enrollment_client import (
+        OOBE_LOG_FILE,
+        apply_keyboard_layout,
+        check_network_ready,
+        configure_static_network,
+        get_oobe_logger,
+        inspect_server,
+        perform_enrollment,
+        save_state,
+    )
 except ImportError:
-    try:
-        from .discovery import discover_lyux_server
-    except Exception:
-        discover_lyux_server = None
+    from .enrollment_client import (
+        OOBE_LOG_FILE,
+        apply_keyboard_layout,
+        check_network_ready,
+        configure_static_network,
+        get_oobe_logger,
+        inspect_server,
+        perform_enrollment,
+        save_state,
+    )
+
 
 class ServerScanWorker(QThread):
-    finished_signal = pyqtSignal(bool, str, list, list, dict)
+    finished_signal = pyqtSignal(dict)
 
     def __init__(self, target_url=None):
         super().__init__()
         self.target_url = target_url
 
     def run(self):
-        urls_to_test = [self.target_url] if self.target_url else [
-            "http://127.0.0.1:8000",
-            "http://192.168.10.1:8000",
-            "http://serveur.lyux.lan:8000",
-            "http://localhost:8000"
-        ]
-        
-        for u in urls_to_test:
-            if not u:
-                continue
-            try:
-                r = requests.get(f"{u}/health", timeout=1.5)
-                if r.status_code == 200:
-                    try:
-                        settings = requests.get(f"{u}/api/v1/settings", timeout=1.5).json()
-                    except Exception:
-                        settings = {"enrollment_enabled": True}
-                    try:
-                        buildings = requests.get(f"{u}/api/v1/buildings", timeout=1.5).json()
-                    except Exception:
-                        buildings = []
-                    try:
-                        rooms = requests.get(f"{u}/api/v1/rooms", timeout=1.5).json()
-                    except Exception:
-                        rooms = []
-                    self.finished_signal.emit(True, u, rooms, buildings, settings)
-                    return
-            except Exception:
-                continue
-        self.finished_signal.emit(False, "", [], [], {})
+        self.finished_signal.emit(inspect_server(self.target_url))
+
 
 class InstallWorker(QThread):
     progress_signal = pyqtSignal(int, str)
@@ -93,301 +90,380 @@ class InstallWorker(QThread):
 
     def run(self):
         steps = [
-            (15, "🌐 Configuration de la langue (Français) et du clavier AZERTY..."),
-            (35, f"📡 Liaison avec le serveur LyuX ({self.server_url})..."),
-            (55, "🔑 Configuration de l'authentification centralisée LDAP & SSSD..."),
-            (75, "📁 Montage dynamique des dossiers réseau (//homes, //classes)..."),
-            (90, "📦 Déploiement du profil logiciel & Thème KDE Plasma..."),
-            (100, "🎉 Finalisation de la configuration système...")
+            (25, "Vérification de l'état réseau et de l'identité matérielle..."),
+            (55, f"Demande d'enrôlement auprès de {self.server_url}..."),
+            (80, "Validation du catalogue et de la signature serveur..."),
         ]
-        
-        for p, desc in steps:
-            time.sleep(0.3)
-            self.progress_signal.emit(p, desc)
-            
-        try:
-            hw = get_hardware_fingerprint()
-            mac = hw.get("mac_address", "52:54:00:12:34:56")
-        except Exception:
-            mac = "52:54:00:12:34:56"
+        for pct, msg in steps:
+            time.sleep(0.15)
+            self.progress_signal.emit(pct, msg)
 
-        try:
-            payload = {
-                "hostname": self.hostname,
-                "building_id": self.building_id,
-                "room_id": self.room_id,
-                "mac_address": mac,
-                "ip_address": "",
-                "role": "prof" if self.is_teacher else "eleve"
-            }
-            resp = requests.post(f"{self.server_url}/api/v1/enroll/client-enroll", json=payload, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                try:
-                    subprocess.run(["hostnamectl", "set-hostname", self.hostname], check=False)
-                    subprocess.run(["systemctl", "disable", "lyux-enrollment.service"], check=False)
-                except Exception:
-                    pass
-                self.finished_signal.emit(True, {"hostname": self.hostname, "room_profile": "standard"})
-            else:
-                self.finished_signal.emit(True, {
-                    "hostname": self.hostname,
-                    "room_profile": "standard",
-                    "error": resp.text
-                })
-        except Exception as e:
-            self.finished_signal.emit(True, {
-                "hostname": self.hostname,
-                "room_profile": "standard",
-                "error": str(e)
-            })
+        role = "prof" if self.is_teacher else "eleve"
+        result = perform_enrollment(
+            self.server_url,
+            self.building_id,
+            self.room_id,
+            self.hostname,
+            role=role,
+        )
+        if result.get("ok"):
+            self.progress_signal.emit(100, "Enrôlement confirmé par le serveur.")
+            self.finished_signal.emit(True, result)
+        else:
+            self.progress_signal.emit(100, f"Échec : {result.get('detail', 'Erreur inconnue')}")
+            self.finished_signal.emit(False, result)
+
 
 class LyuxOOBEWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🐧 LyuX Setup — Configuration Rapide du Poste")
-        self.resize(1000, 680)
-        self.setMinimumSize(880, 600)
+        self.setWindowTitle("LyuX Setup — Enrôlement du poste")
+        self.resize(1024, 680)
+        self.setMinimumSize(860, 580)
 
-        self.server_url = "http://127.0.0.1:8000"
-        self.selected_room = "B204"
+        self.server_url = ""
+        self.selected_building = ""
+        self.selected_room = ""
+        self.assigned_hostname = ""
         self.is_teacher = False
-        self.otp_code = "LYUX-DEMO-2026"
-        self.assigned_hostname = "b204-pc01"
-        self.server_rooms = {}
-        self.current_user = None
+        self.server_rooms = []
+        self.server_buildings = []
+        self.server_roles = []
+        self.oobe_logger = get_oobe_logger()
 
-        self.init_style()
-        self.init_ui()
+        self._apply_light_theme()
+        self._build_ui()
+        self._refresh_network_badge()
         self.auto_scan_server()
 
-    def init_style(self):
+    def _apply_light_theme(self):
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #0F172A;
+            QMainWindow, QWidget#RootCanvas {
+                background-color: #F1F5F9;
+                color: #0F172A;
+                font-family: 'Inter', 'Noto Sans', 'Segoe UI', sans-serif;
             }
-            QLabel {
-                color: #E2E8F0;
-                font-family: 'Segoe UI', 'Ubuntu', sans-serif;
+            QFrame#ShellCard {
+                background-color: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 14px;
             }
-            QFrame#SetupCard {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 20px;
+            QFrame#Sidebar {
+                background-color: #F8FAFC;
+                border-right: 1px solid #E2E8F0;
+                border-top-left-radius: 14px;
+                border-bottom-left-radius: 14px;
+            }
+            QFrame#BottomBar {
+                background-color: #F8FAFC;
+                border-top: 1px solid #E2E8F0;
+                border-bottom-right-radius: 14px;
+            }
+            QLabel#LogoPlaceholder {
+                background-color: #EFF6FF;
+                color: #1D4ED8;
+                border: 1px dashed #93C5FD;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: 800;
+                letter-spacing: 2px;
+                padding: 10px 14px;
+            }
+            QLabel#PageTitle {
+                font-size: 20px;
+                font-weight: 700;
+                color: #0F172A;
+            }
+            QLabel#PageSubtitle {
+                font-size: 13px;
+                color: #475569;
+            }
+            QLabel#FieldLabel {
+                font-size: 12px;
+                font-weight: 600;
+                color: #334155;
+            }
+            QLineEdit, QComboBox {
+                background-color: #FFFFFF;
+                color: #0F172A;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+                min-height: 20px;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #2563EB;
+            }
+            QLineEdit:read-only {
+                background-color: #F8FAFC;
+                color: #334155;
             }
             QPushButton {
-                background-color: #334155;
-                color: #F8FAFC;
-                border: 1px solid #475569;
-                border-radius: 10px;
-                padding: 10px 20px;
+                background-color: #FFFFFF;
+                color: #1E293B;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-size: 13px;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background-color: #475569;
-                border-color: #38BDF8;
+                background-color: #F8FAFC;
+                border-color: #94A3B8;
+            }
+            QPushButton:disabled {
+                background-color: #E2E8F0;
+                color: #94A3B8;
+                border-color: #CBD5E1;
             }
             QPushButton#PrimaryBtn {
-                background-color: #0284C7;
+                background-color: #2563EB;
                 color: #FFFFFF;
                 border: none;
-                font-weight: bold;
             }
             QPushButton#PrimaryBtn:hover {
-                background-color: #0EA5E9;
+                background-color: #1D4ED8;
+            }
+            QPushButton#PrimaryBtn:disabled {
+                background-color: #CBD5E1;
+                color: #64748B;
             }
             QPushButton#SuccessBtn {
-                background-color: #10B981;
-                color: #0F172A;
+                background-color: #059669;
+                color: #FFFFFF;
                 border: none;
-                font-weight: bold;
             }
             QPushButton#SuccessBtn:hover {
-                background-color: #34D399;
-            }
-            QLineEdit, QComboBox {
-                background-color: #0F172A;
-                color: #F8FAFC;
-                border: 1px solid #475569;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 13px;
-            }
-            QLineEdit:focus, QComboBox:focus {
-                border-color: #38BDF8;
+                background-color: #047857;
             }
             QProgressBar {
-                background-color: #0F172A;
-                border: 1px solid #334155;
-                border-radius: 8px;
+                background-color: #E2E8F0;
+                border: none;
+                border-radius: 6px;
+                height: 12px;
                 text-align: center;
-                color: #F8FAFC;
-                font-weight: bold;
-                height: 24px;
+                font-size: 11px;
+                color: #0F172A;
             }
             QProgressBar::chunk {
-                background-color: #38BDF8;
-                border-radius: 7px;
+                background-color: #2563EB;
+                border-radius: 6px;
             }
         """)
 
-    def init_ui(self):
+    def _build_ui(self):
+        root = QWidget()
+        root.setObjectName("RootCanvas")
+        root_lay = QVBoxLayout(root)
+        root_lay.setContentsMargins(36, 28, 36, 28)
+        root_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        shell = QFrame()
+        shell.setObjectName("ShellCard")
+        shell.setFixedSize(920, 590)
+        shell_lay = QHBoxLayout(shell)
+        shell_lay.setContentsMargins(0, 0, 0, 0)
+        shell_lay.setSpacing(0)
+
+        # Colonne gauche : LOGO texte + étapes
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(250)
+        sb_lay = QVBoxLayout(sidebar)
+        sb_lay.setContentsMargins(22, 26, 22, 22)
+        sb_lay.setSpacing(14)
+
+        logo_lbl = QLabel("LOGO")
+        logo_lbl.setObjectName("LogoPlaceholder")
+        logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sb_lay.addWidget(logo_lbl)
+
+        brand_sub = QLabel("LyuX Client Setup")
+        brand_sub.setStyleSheet("font-size: 13px; font-weight: 700; color: #334155;")
+        brand_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sb_lay.addWidget(brand_sub)
+
+        sb_lay.addSpacing(12)
+
+        self.step_labels = []
+        for idx, title in enumerate(["1. Serveur LyuX", "2. Affectation", "3. Enrôlement"], start=0):
+            lbl = QLabel(title)
+            lbl.setStyleSheet(self._step_style(idx == 0, False))
+            sb_lay.addWidget(lbl)
+            self.step_labels.append(lbl)
+
+        sb_lay.addStretch()
+
+        info_lbl = QLabel("Système : Debian 13 (FR)\nX11 / OOBE sécurisé")
+        info_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+        sb_lay.addWidget(info_lbl)
+
+        shell_lay.addWidget(sidebar)
+
+        # Zone droite : contenu + barre utilitaire basse
+        right_col = QWidget()
+        right_lay = QVBoxLayout(right_col)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
+
         self.stacked = QStackedWidget()
-        self.setCentralWidget(self.stacked)
-
-        # 5 Écrans OOBE
-        self.page_lang = self.create_page_language()     # Index 0
-        self.page_server = self.create_page_server()     # Index 1
-        self.page_room = self.create_page_room()         # Index 2
-        self.page_install = self.create_page_install()   # Index 3
-        self.page_login = self.create_page_login()       # Index 4
-        self.page_desktop = self.create_page_desktop()   # Index 5
-
-        self.stacked.addWidget(self.page_lang)
+        self.page_server = self._create_page_server()     # 0
+        self.page_room = self._create_page_room()         # 1
+        self.page_install = self._create_page_install()   # 2
         self.stacked.addWidget(self.page_server)
         self.stacked.addWidget(self.page_room)
         self.stacked.addWidget(self.page_install)
-        self.stacked.addWidget(self.page_login)
-        self.stacked.addWidget(self.page_desktop)
+        self.stacked.currentChanged.connect(self._update_sidebar_steps)
+        right_lay.addWidget(self.stacked, 1)
 
-    # -------------------------------------------------------------------------
-    # ÉTAPE 1 : LANGUE & CLAVIER (OPTIONS PAR DÉFAUT MODIFIABLES)
-    # -------------------------------------------------------------------------
-    def create_page_language(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Barre utilitaire basse (clavier réel, réseau, journal)
+        bottom_bar = QFrame()
+        bottom_bar.setObjectName("BottomBar")
+        bottom_bar.setFixedHeight(52)
+        bb_lay = QHBoxLayout(bottom_bar)
+        bb_lay.setContentsMargins(20, 6, 20, 6)
+        bb_lay.setSpacing(10)
 
-        card = QFrame()
-        card.setObjectName("SetupCard")
-        card.setFixedSize(580, 500)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(40, 35, 40, 35)
-        card_layout.setSpacing(18)
+        kbd_lbl = QLabel("Clavier :")
+        kbd_lbl.setStyleSheet("font-size: 12px; color: #475569; font-weight: 600;")
+        bb_lay.addWidget(kbd_lbl)
 
-        # Header
-        header = QHBoxLayout()
-        logo = QLabel("🐧 LyuX Setup")
-        logo.setStyleSheet("font-size: 22px; font-weight: bold; color: #38BDF8;")
-        header.addWidget(logo)
-        step = QLabel("Étape 1 sur 4")
-        step.setStyleSheet("color: #94A3B8; font-size: 12px; font-weight: bold;")
-        header.addStretch()
-        header.addWidget(step)
-        card_layout.addLayout(header)
-
-        title = QLabel("Bienvenue sur votre nouveau poste")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
-        card_layout.addWidget(title)
-
-        desc = QLabel("Sélectionnez vos préférences régionales. La langue française et le clavier AZERTY sont préconfigurés par défaut.")
-        desc.setWordWrap(True)
-        desc.setStyleSheet("color: #94A3B8; font-size: 12px;")
-        card_layout.addWidget(desc)
-
-        # Langue
-        card_layout.addWidget(QLabel("🌐 Langue du système :"))
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItem("🇫🇷 Français (France) [Par défaut]", "fr_FR")
-        self.lang_combo.addItem("🇬🇧 English (US)", "en_US")
-        self.lang_combo.addItem("🇪🇸 Español", "es_ES")
-        self.lang_combo.addItem("🇩🇪 Deutsch", "de_DE")
-        card_layout.addWidget(self.lang_combo)
-
-        # Clavier
-        card_layout.addWidget(QLabel("⌨️ Disposition du clavier :"))
         self.kbd_combo = QComboBox()
-        self.kbd_combo.addItem("⌨️ Français AZERTY (latin9) [Par défaut]", "fr")
-        self.kbd_combo.addItem("⌨️ Anglais QWERTY (US)", "us")
-        self.kbd_combo.addItem("⌨️ Belge AZERTY", "be")
-        self.kbd_combo.addItem("⌨️ Suisse Romand", "ch_fr")
-        card_layout.addWidget(self.kbd_combo)
+        self.kbd_combo.addItem("FR (AZERTY)", "fr")
+        self.kbd_combo.addItem("US (QWERTY)", "us")
+        self.kbd_combo.addItem("BE (AZERTY)", "be")
+        self.kbd_combo.addItem("CH (Romand)", "ch")
+        self.kbd_combo.setFixedWidth(135)
+        self.kbd_combo.currentIndexChanged.connect(self._on_keyboard_changed)
+        bb_lay.addWidget(self.kbd_combo)
 
-        card_layout.addStretch()
+        self.net_status_lbl = QLabel("Réseau : vérification...")
+        self.net_status_lbl.setStyleSheet("font-size: 12px; color: #475569;")
+        bb_lay.addWidget(self.net_status_lbl)
 
-        # Bouton Suivant
-        next_btn = QPushButton("Suivant (Connexion Serveur) →")
-        next_btn.setObjectName("PrimaryBtn")
-        next_btn.setFixedHeight(45)
-        next_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(1))
-        card_layout.addWidget(next_btn)
+        bb_lay.addStretch()
 
-        layout.addWidget(card)
-        return page
+        self.static_net_btn = QPushButton("IP statique")
+        self.static_net_btn.clicked.connect(self.open_static_network_dialog)
+        bb_lay.addWidget(self.static_net_btn)
+
+        self.logs_btn = QPushButton("Journal")
+        self.logs_btn.clicked.connect(self._open_logs_dialog)
+        bb_lay.addWidget(self.logs_btn)
+
+        right_lay.addWidget(bottom_bar)
+        shell_lay.addWidget(right_col, 1)
+
+        root_lay.addWidget(shell)
+        self.setCentralWidget(root)
+
+    def _step_style(self, active: bool, done: bool) -> str:
+        if active:
+            return (
+                "background-color: #EFF6FF; color: #1D4ED8; font-weight: 700;"
+                "border-left: 3px solid #2563EB; border-radius: 6px; padding: 9px 12px; font-size: 13px;"
+            )
+        if done:
+            return (
+                "background-color: #ECFDF5; color: #047857; font-weight: 600;"
+                "border-radius: 6px; padding: 9px 12px; font-size: 13px;"
+            )
+        return "color: #64748B; padding: 9px 12px; font-size: 13px;"
+
+    def _update_sidebar_steps(self, current_idx: int):
+        for i, lbl in enumerate(self.step_labels):
+            lbl.setStyleSheet(self._step_style(i == current_idx, i < current_idx))
+
+    def _on_keyboard_changed(self):
+        code = self.kbd_combo.currentData()
+        ok, msg = apply_keyboard_layout(code)
+        if not ok:
+            QMessageBox.warning(self, "Clavier", msg)
+
+    def _refresh_network_badge(self):
+        ok, ifaces = check_network_ready()
+        if ok:
+            self.net_status_lbl.setText(f"Réseau : {', '.join(ifaces[:2])}")
+            self.net_status_lbl.setStyleSheet("font-size: 12px; color: #047857; font-weight: 600;")
+        else:
+            self.net_status_lbl.setText("Réseau : aucune IPv4")
+            self.net_status_lbl.setStyleSheet("font-size: 12px; color: #B91C1C; font-weight: 600;")
+
+    def _open_logs_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Journal OOBE")
+        dlg.resize(660, 420)
+        lay = QVBoxLayout(dlg)
+        txt = QPlainTextEdit()
+        txt.setReadOnly(True)
+        if OOBE_LOG_FILE.exists():
+            txt.setPlainText(OOBE_LOG_FILE.read_text(encoding="utf-8", errors="replace"))
+        else:
+            txt.setPlainText("Aucun journal OOBE enregistré pour le moment.")
+        lay.addWidget(txt)
+        btn = QPushButton("Fermer")
+        btn.clicked.connect(dlg.accept)
+        lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
+        dlg.exec()
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 2 : DÉTECTION & CONNEXION AU SERVEUR LYUX
+    # ÉCRAN 1 : CONNEXION AU SERVEUR LYUX
     # -------------------------------------------------------------------------
-    def create_page_server(self):
+    def _create_page_server(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(32, 28, 32, 24)
+        lay.setSpacing(14)
 
-        card = QFrame()
-        card.setObjectName("SetupCard")
-        card.setFixedSize(580, 520)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(40, 35, 40, 35)
-        card_layout.setSpacing(16)
+        title = QLabel("Connexion au serveur LyuX")
+        title.setObjectName("PageTitle")
+        lay.addWidget(title)
 
-        # Header
-        header = QHBoxLayout()
-        logo = QLabel("🐧 LyuX Setup")
-        logo.setStyleSheet("font-size: 22px; font-weight: bold; color: #38BDF8;")
-        header.addWidget(logo)
-        step = QLabel("Étape 2 sur 4")
-        step.setStyleSheet("color: #94A3B8; font-size: 12px; font-weight: bold;")
-        header.addStretch()
-        header.addWidget(step)
-        card_layout.addLayout(header)
+        sub = QLabel("Le poste recherche le serveur d'enrôlement sur le réseau local ou via l'adresse saisie ci-dessous.")
+        sub.setObjectName("PageSubtitle")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
 
-        title = QLabel("Connexion au Serveur Central")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
-        card_layout.addWidget(title)
-
-        desc = QLabel("Le poste recherche automatiquement le serveur LyuX sur le réseau local du lycée.")
-        desc.setWordWrap(True)
-        desc.setStyleSheet("color: #94A3B8; font-size: 12px;")
-        card_layout.addWidget(desc)
-
-        # Badge Statut Serveur
         self.server_status_frame = QFrame()
-        self.server_status_frame.setStyleSheet("background: #0F172A; border: 1px solid #334155; border-radius: 10px; padding: 12px;")
-        status_lay = QVBoxLayout(self.server_status_frame)
-        self.server_status_lbl = QLabel("🔍 Recherche du serveur LyuX en cours...")
-        self.server_status_lbl.setStyleSheet("color: #FCD34D; font-weight: bold; font-size: 13px;")
-        self.server_details_lbl = QLabel("Scan des adresses locales...")
-        self.server_details_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
-        status_lay.addWidget(self.server_status_lbl)
-        status_lay.addWidget(self.server_details_lbl)
-        card_layout.addWidget(self.server_status_frame)
+        self.server_status_frame.setStyleSheet(
+            "background-color: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 10px; padding: 12px;"
+        )
+        st_lay = QVBoxLayout(self.server_status_frame)
+        st_lay.setSpacing(4)
+        self.server_status_lbl = QLabel("Recherche du serveur en cours...")
+        self.server_status_lbl.setStyleSheet("color: #B45309; font-weight: 700; font-size: 13px;")
+        self.server_details_lbl = QLabel("Vérification du réseau et de l'API...")
+        self.server_details_lbl.setStyleSheet("color: #475569; font-size: 12px;")
+        self.server_details_lbl.setWordWrap(True)
+        st_lay.addWidget(self.server_status_lbl)
+        st_lay.addWidget(self.server_details_lbl)
+        lay.addWidget(self.server_status_frame)
 
-        # URL Manuelle
-        card_layout.addWidget(QLabel("URL du serveur LyuX (Modifiable) :"))
-        url_box = QHBoxLayout()
-        self.server_url_input = QLineEdit(self.server_url)
-        self.rescan_btn = QPushButton("Tester")
+        url_lbl = QLabel("Adresse du serveur (format http(s)://hote:port)")
+        url_lbl.setObjectName("FieldLabel")
+        lay.addWidget(url_lbl)
+
+        url_row = QHBoxLayout()
+        self.server_url_input = QLineEdit()
+        self.server_url_input.setPlaceholderText("http://lyux-server:8000")
+        self.rescan_btn = QPushButton("Tester / Réessayer")
         self.rescan_btn.clicked.connect(self.manual_scan_server)
-        url_box.addWidget(self.server_url_input)
-        url_box.addWidget(self.rescan_btn)
-        card_layout.addLayout(url_box)
+        url_row.addWidget(self.server_url_input, 1)
+        url_row.addWidget(self.rescan_btn)
+        lay.addLayout(url_row)
 
-        card_layout.addStretch()
+        lay.addStretch()
 
-        # Navigation
-        nav_box = QHBoxLayout()
-        back_btn = QPushButton("← Retour")
-        back_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(0))
-        self.server_next_btn = QPushButton("Suivant (Choix Salle) →")
+        nav = QHBoxLayout()
+        nav.addStretch()
+        self.server_next_btn = QPushButton("Suivant : Affectation")
         self.server_next_btn.setObjectName("PrimaryBtn")
-        self.server_next_btn.setFixedHeight(45)
-        self.server_next_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(2))
-        nav_box.addWidget(back_btn)
-        nav_box.addWidget(self.server_next_btn)
-        card_layout.addLayout(nav_box)
-
-        layout.addWidget(card)
+        self.server_next_btn.setFixedHeight(40)
+        self.server_next_btn.setEnabled(False)
+        self.server_next_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(1))
+        nav.addWidget(self.server_next_btn)
+        lay.addLayout(nav)
         return page
 
     def auto_scan_server(self):
@@ -396,212 +472,337 @@ class LyuxOOBEWindow(QMainWindow):
         self.worker.start()
 
     def manual_scan_server(self):
+        self._refresh_network_badge()
         url = self.server_url_input.text().strip()
-        self.server_status_lbl.setText("🔄 Test de connexion...")
-        self.server_status_lbl.setStyleSheet("color: #38BDF8; font-weight: bold; font-size: 13px;")
-        self.worker = ServerScanWorker(target_url=url)
+        if url:
+            valid, norm, err = validate_server_url(url)
+            if not valid:
+                self._set_status_box("#FEF2F2", "#FECACA", "#B91C1C", "Adresse serveur invalide", err)
+                self.server_next_btn.setEnabled(False)
+                return
+            url = norm
+        self._set_status_box("#EFF6FF", "#BFDBFE", "#1D4ED8", "Test de connexion...", "Vérification de la santé de l'API...")
+        self.worker = ServerScanWorker(target_url=url or None)
         self.worker.finished_signal.connect(self.on_server_scanned)
         self.worker.start()
 
-    def on_server_scanned(self, ok, url, rooms, buildings, settings):
-        if ok:
-            self.server_url = url
-            self.server_rooms = rooms
-            self.server_buildings = buildings
-            self.server_settings = settings
-            self.server_url_input.setText(url)
-            
-            is_enabled = settings.get("enrollment_enabled", False)
-            if is_enabled:
-                self.server_status_lbl.setText("🟢 Connecté au Serveur LyuX (Enrôlement Ouvert)")
-                self.server_status_lbl.setStyleSheet("color: #34D399; font-weight: bold; font-size: 13px;")
-                self.server_details_lbl.setText(f"API v1.0.0 • Autorisation active • URL : {url}")
-                self.server_next_btn.setEnabled(True)
-                self.server_next_btn.setText("Suivant (Choix Salle) →")
+    def _set_status_box(self, bg: str, border: str, fg: str, title: str, detail: str):
+        self.server_status_frame.setStyleSheet(
+            f"background-color: {bg}; border: 1px solid {border}; border-radius: 10px; padding: 12px;"
+        )
+        self.server_status_lbl.setStyleSheet(f"color: {fg}; font-weight: 700; font-size: 13px; border: none;")
+        self.server_details_lbl.setStyleSheet("color: #334155; font-size: 12px; border: none;")
+        self.server_status_lbl.setText(title)
+        self.server_details_lbl.setText(detail)
+
+    def open_static_network_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Configuration réseau statique (IPv4)")
+        form = QFormLayout(dlg)
+        iface_in = QLineEdit("eth0")
+        ip_in = QLineEdit()
+        ip_in.setPlaceholderText("192.168.1.50/24")
+        gw_in = QLineEdit()
+        gw_in.setPlaceholderText("192.168.1.1")
+        dns_in = QLineEdit()
+        dns_in.setPlaceholderText("192.168.1.1")
+        form.addRow("Interface :", iface_in)
+        form.addRow("IP / Masque (CIDR) :", ip_in)
+        form.addRow("Passerelle :", gw_in)
+        form.addRow("DNS :", dns_in)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addWidget(buttons)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            ok, msg = configure_static_network(iface_in.text(), ip_in.text(), gw_in.text(), dns_in.text())
+            if ok:
+                self._refresh_network_badge()
+                self.manual_scan_server()
             else:
-                self.server_status_lbl.setText("🔴 Ajout de PC actuellement verrouillé sur le serveur")
-                self.server_status_lbl.setStyleSheet("color: #F87171; font-weight: bold; font-size: 13px;")
-                self.server_details_lbl.setText("Activez l'option dans l'Admin Panel (Parc & Salles) pour autoriser l'enrôlement.")
-                self.server_next_btn.setEnabled(False)
-                self.server_next_btn.setText("Enrôlement Désactivé (Verrouillé)")
-                
-            self.update_buildings_and_rooms()
-        else:
-            self.server_status_lbl.setText("🟡 Serveur non joignable (Mode simulation local)")
-            self.server_status_lbl.setStyleSheet("color: #FCD34D; font-weight: bold; font-size: 13px;")
-            self.server_details_lbl.setText("L'enrôlement utilisera le profil local hors-ligne.")
+                QMessageBox.warning(self, "Erreur réseau", msg)
+
+    def on_server_scanned(self, result):
+        self._refresh_network_badge()
+        state = result.get("state", "server-unreachable")
+        detail = result.get("detail", "")
+        url = result.get("server_url", "")
+
+        if state == "enrolled":
+            machine = result.get("machine", {})
+            self.server_url = url
+            self.assigned_hostname = machine.get("hostname", "")
+            self.selected_building = machine.get("building_id", "")
+            self.selected_room = machine.get("room_id", "")
+            self._set_status_box(
+                "#ECFDF5", "#A7F3D0", "#047857",
+                "Poste déjà enrôlé (reprise confirmée)",
+                f"Identité : {self.assigned_hostname} ({self.selected_building}/{self.selected_room})",
+            )
+            save_state("enrolled", server_url=url, hostname=self.assigned_hostname, building_id=self.selected_building, room_id=self.selected_room)
+            if os.getenv("LYUX_OOBE_EXIT_ON_ENROLL", "0") == "1":
+                QTimer.singleShot(900, QApplication.instance().quit)
+            return
+
+        if state == "authorized":
+            self.server_url = url
+            self.server_rooms = result.get("rooms", [])
+            self.server_buildings = result.get("buildings", [])
+            self.server_roles = result.get("roles", [])
+            self.server_url_input.setText(url)
+            self._set_status_box(
+                "#ECFDF5", "#A7F3D0", "#047857",
+                "Connecté au serveur LyuX — Enrôlement ouvert",
+                f"API v1 joignable sur {url}",
+            )
             self.server_next_btn.setEnabled(True)
-            self.server_next_btn.setText("Suivant (Choix Salle) →")
+            self.server_next_btn.setText("Suivant : Affectation")
+            save_state("authorized", server_url=url, last_error="")
+            self.update_buildings_and_rooms()
+        elif state == "awaiting-authorization":
+            self.server_url = url
+            self.server_url_input.setText(url)
+            self._set_status_box(
+                "#FFFBEB", "#FDE68A", "#B45309",
+                "Serveur joignable — Enrôlement verrouillé",
+                detail or "Activez l'enrôlement dans l'Admin Panel puis cliquez sur Tester / Réessayer.",
+            )
+            self.server_next_btn.setEnabled(False)
+            self.server_next_btn.setText("Enrôlement verrouillé")
+            save_state("awaiting-authorization", server_url=url, last_error=detail)
+        elif state == "network-error":
+            self._set_status_box(
+                "#FEF2F2", "#FECACA", "#B91C1C",
+                "Erreur réseau : aucune IPv4 active",
+                detail or "Vérifiez le câble ou configurez une IP statique ci-dessous.",
+            )
+            self.server_next_btn.setEnabled(False)
+            self.server_next_btn.setText("Réseau requis")
+            save_state("network-error", last_error=detail)
+        else:
+            self._set_status_box(
+                "#FEF2F2", "#FECACA", "#B91C1C",
+                "Serveur absent ou API inaccessible",
+                detail or "Vérifiez le réseau ou l'adresse du serveur.",
+            )
+            self.server_next_btn.setEnabled(False)
+            self.server_next_btn.setText("Serveur requis")
+            save_state("server-unreachable", server_url=self.server_url_input.text().strip(), last_error=detail)
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 3 : CHOIX DU BÂTIMENT, DE LA SALLE & DU NOM D'ORDINATEUR
+    # ÉCRAN 2 : AFFECTATION (CATALOGUE SERVEUR UNIQUEMENT)
     # -------------------------------------------------------------------------
-    def create_page_room(self):
+    def _create_page_room(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(32, 28, 32, 24)
+        lay.setSpacing(12)
 
-        card = QFrame()
-        card.setObjectName("SetupCard")
-        card.setFixedSize(580, 540)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(40, 35, 40, 35)
-        card_layout.setSpacing(14)
+        title = QLabel("Affectation et identité du poste")
+        title.setObjectName("PageTitle")
+        lay.addWidget(title)
 
-        # Header
-        header = QHBoxLayout()
-        logo = QLabel("🐧 LyuX Setup")
-        logo.setStyleSheet("font-size: 22px; font-weight: bold; color: #38BDF8;")
-        header.addWidget(logo)
-        step = QLabel("Étape 3 sur 4")
-        step.setStyleSheet("color: #94A3B8; font-size: 12px; font-weight: bold;")
-        header.addStretch()
-        header.addWidget(step)
-        card_layout.addLayout(header)
+        sub = QLabel("Les bâtiments, salles, rôles et noms d'ordinateur proviennent exclusivement du serveur LyuX.")
+        sub.setObjectName("PageSubtitle")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
 
-        title = QLabel("Affectation et Identité de la Machine")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
-        card_layout.addWidget(title)
-
-        # Choix Bâtiment
-        card_layout.addWidget(QLabel("🏢 Bâtiment de rattachement :"))
+        b_lbl = QLabel("Bâtiment")
+        b_lbl.setObjectName("FieldLabel")
+        lay.addWidget(b_lbl)
         self.building_combo = QComboBox()
         self.building_combo.currentIndexChanged.connect(self.on_building_changed)
-        card_layout.addWidget(self.building_combo)
+        lay.addWidget(self.building_combo)
 
-        # Choix Salle
-        card_layout.addWidget(QLabel("🏫 Salle / Classe de destination :"))
+        r_lbl = QLabel("Salle / Classe")
+        r_lbl.setObjectName("FieldLabel")
+        lay.addWidget(r_lbl)
         self.room_combo = QComboBox()
         self.room_combo.currentIndexChanged.connect(self.on_room_changed)
-        card_layout.addWidget(self.room_combo)
+        lay.addWidget(self.room_combo)
 
-        # Nom de l'ordinateur
-        card_layout.addWidget(QLabel("💻 Nom de l'ordinateur (Hostname unique) :"))
+        h_lbl = QLabel("Nom d'ordinateur (modifiable, vérifié par le serveur)")
+        h_lbl.setObjectName("FieldLabel")
+        lay.addWidget(h_lbl)
         self.hostname_input = QLineEdit()
         self.hostname_input.setPlaceholderText("Ex : C14-PC01")
-        card_layout.addWidget(self.hostname_input)
+        lay.addWidget(self.hostname_input)
 
-        # Type de poste
-        card_layout.addWidget(QLabel("👤 Rôle du poste :"))
-        self.role_combo = QComboBox()
-        self.role_combo.addItem("Poste Élève standard (Kiosk sécurisé + Veyon Client)", False)
-        self.role_combo.addItem("Poste Enseignant Principal (Veyon Master + Gestion)", True)
-        card_layout.addWidget(self.role_combo)
+        root_lbl = QLabel("Mot de passe root local (seul compte local de secours)")
+        root_lbl.setObjectName("FieldLabel")
+        lay.addWidget(root_lbl)
+        self.root_pwd_input = QLineEdit()
+        self.root_pwd_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.root_pwd_input.setPlaceholderText("Définir le mot de passe root (min. 8 caractères)")
+        lay.addWidget(self.root_pwd_input)
 
-        card_layout.addStretch()
+        self.root_pwd_confirm_input = QLineEdit()
+        self.root_pwd_confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.root_pwd_confirm_input.setPlaceholderText("Confirmer le mot de passe root")
+        lay.addWidget(self.root_pwd_confirm_input)
 
-        # Navigation
-        nav_box = QHBoxLayout()
-        back_btn = QPushButton("← Retour")
-        back_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(1))
-        launch_btn = QPushButton("🚀 Lancer l'Enrôlement et la Configuration")
+        key_notice = QLabel(
+            "Note : les autres comptes locaux seront verrouillés après l'enrôlement. "
+            "La prise en charge des clés de sécurité matérielles (FIDO2 / USB) arrive prochainement."
+        )
+        key_notice.setWordWrap(True)
+        key_notice.setStyleSheet(
+            "background-color: #EFF6FF; color: #1E40AF; border: 1px solid #BFDBFE; "
+            "border-radius: 8px; padding: 8px 10px; font-size: 11px;"
+        )
+        lay.addWidget(key_notice)
+
+        lay.addStretch()
+
+        nav = QHBoxLayout()
+        back_btn = QPushButton("Retour")
+        back_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(0))
+        launch_btn = QPushButton("Lancer l'enrôlement")
         launch_btn.setObjectName("SuccessBtn")
-        launch_btn.setFixedHeight(45)
+        launch_btn.setFixedHeight(40)
         launch_btn.clicked.connect(self.start_installation)
-        nav_box.addWidget(back_btn)
-        nav_box.addWidget(launch_btn)
-        card_layout.addLayout(nav_box)
-
-        layout.addWidget(card)
+        nav.addWidget(back_btn)
+        nav.addStretch()
+        nav.addWidget(launch_btn)
+        lay.addLayout(nav)
         return page
 
     def update_buildings_and_rooms(self):
         self.building_combo.blockSignals(True)
         self.building_combo.clear()
-        if self.server_buildings:
-            for b in self.server_buildings:
-                self.building_combo.addItem(f"{b['name']} ({b['id']})", b['id'])
-        else:
-            self.building_combo.addItem("Bâtiment C (BAT-C)", "BAT-C")
-            self.building_combo.addItem("Bâtiment B (BAT-B)", "BAT-B")
-            self.building_combo.addItem("Bâtiment A (BAT-A)", "BAT-A")
+        room_buildings = {r.get("building_id") for r in self.server_rooms if r.get("building_id")}
+        first_valid_idx = 0
+        for idx, b in enumerate(self.server_buildings):
+            self.building_combo.addItem(f"{b['name']} ({b['id']})", b["id"])
+            if first_valid_idx == 0 and b["id"] in room_buildings:
+                first_valid_idx = idx
+        if self.building_combo.count() > 0:
+            self.building_combo.setCurrentIndex(first_valid_idx)
         self.building_combo.blockSignals(False)
         self.on_building_changed()
 
     def on_building_changed(self):
-        b_id = self.building_combo.currentData() or "BAT-C"
+        b_id = self.building_combo.currentData()
         self.room_combo.blockSignals(True)
         self.room_combo.clear()
-        
-        filtered_rooms = [r for r in self.server_rooms if r.get('building_id') == b_id]
-        if not filtered_rooms and self.server_rooms:
-            filtered_rooms = self.server_rooms
-
-        for r in filtered_rooms:
-            self.room_combo.addItem(f"{r['name']} ({r['id']})", r['id'])
-        
-        if self.room_combo.count() == 0:
-            self.room_combo.addItem("Salle C14 (C14)", "C14")
-
+        for r in [rm for rm in self.server_rooms if rm.get("building_id") == b_id]:
+            self.room_combo.addItem(f"{r['name']} ({r['id']})", r["id"])
         self.room_combo.blockSignals(False)
         self.on_room_changed()
 
     def on_room_changed(self):
-        r_id = self.room_combo.currentData() or "C14"
-        b_id = self.building_combo.currentData() or "BAT-C"
+        r_id = self.room_combo.currentData()
+        b_id = self.building_combo.currentData()
+        if not r_id or not b_id or not self.server_url:
+            self.hostname_input.setText("")
+            return
         try:
-            r = requests.get(f"{self.server_url}/api/v1/enroll/suggest-hostname?room_id={r_id}&building_id={b_id}", timeout=2)
-            if r.status_code == 200:
-                sug = r.json().get("suggested_hostname", f"{r_id}-PC01")
-                self.hostname_input.setText(sug)
+            res = requests.get(
+                f"{self.server_url}/api/v1/enroll/suggest-hostname?room_id={r_id}&building_id={b_id}",
+                timeout=2,
+            )
+            if res.status_code == 200:
+                self.hostname_input.setText(res.json().get("suggested_hostname", ""))
                 return
         except Exception:
             pass
-        self.hostname_input.setText(f"{r_id}-PC01")
+        self.hostname_input.setText("")
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 4 : INSTALLATION DES DÉPENDANCES & CONFIGURATION AUTOMATIQUE
+    # ÉCRAN 3 : ENRÔLEMENT & FINALISATION
     # -------------------------------------------------------------------------
-    def create_page_install(self):
+    def _create_page_install(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(32, 28, 32, 24)
+        lay.setSpacing(14)
 
-        card = QFrame()
-        card.setObjectName("SetupCard")
-        card.setFixedSize(580, 500)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(40, 35, 40, 35)
-        card_layout.setSpacing(20)
+        self.install_title = QLabel("Enrôlement du poste en cours...")
+        self.install_title.setObjectName("PageTitle")
+        lay.addWidget(self.install_title)
 
-        title = QLabel("⚡ Configuration du poste en cours...")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #38BDF8;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_layout.addWidget(title)
-
-        self.install_desc = QLabel("Installation des composants système, liaisons LDAP et montages réseau...")
+        self.install_desc = QLabel("Communication sécurisée avec le serveur LyuX...")
+        self.install_desc.setObjectName("PageSubtitle")
         self.install_desc.setWordWrap(True)
-        self.install_desc.setStyleSheet("color: #94A3B8; font-size: 13px;")
-        self.install_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_layout.addWidget(self.install_desc)
+        lay.addWidget(self.install_desc)
 
-        # Barre de progression
         self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(10)
-        card_layout.addWidget(self.progress_bar)
+        self.progress_bar.setValue(0)
+        lay.addWidget(self.progress_bar)
 
-        # Log box
         self.log_box = QLabel("Initialisation...")
-        self.log_box.setStyleSheet("background: #0F172A; border: 1px solid #334155; border-radius: 8px; padding: 12px; color: #38BDF8; font-family: monospace; font-size: 11px;")
-        card_layout.addWidget(self.log_box)
+        self.log_box.setWordWrap(True)
+        self.log_box.setStyleSheet(
+            "background-color: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px;"
+            "padding: 12px; color: #1E293B; font-family: monospace; font-size: 12px;"
+        )
+        lay.addWidget(self.log_box)
 
-        card_layout.addStretch()
+        lay.addStretch()
 
-        self.install_status_lbl = QLabel("Veuillez patienter...")
-        self.install_status_lbl.setStyleSheet("color: #64748B; font-size: 12px;")
-        self.install_status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_layout.addWidget(self.install_status_lbl)
-
-        layout.addWidget(card)
+        nav = QHBoxLayout()
+        self.install_back_btn = QPushButton("Retour")
+        self.install_back_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(0))
+        self.install_back_btn.setVisible(False)
+        self.install_retry_btn = QPushButton("Réessayer l'enrôlement")
+        self.install_retry_btn.setObjectName("PrimaryBtn")
+        self.install_retry_btn.clicked.connect(self.start_installation)
+        self.install_retry_btn.setVisible(False)
+        nav.addWidget(self.install_back_btn)
+        nav.addStretch()
+        nav.addWidget(self.install_retry_btn)
+        lay.addLayout(nav)
         return page
 
     def start_installation(self):
-        self.selected_building = self.building_combo.currentData() or "BAT-C"
-        self.selected_room = self.room_combo.currentData() or "C14"
-        self.assigned_hostname = self.hostname_input.text().strip() or f"{self.selected_room}-PC01"
-        self.is_teacher = self.role_combo.currentData() or False
+        self.selected_building = self.building_combo.currentData() or ""
+        self.selected_room = self.room_combo.currentData() or ""
+        self.assigned_hostname = self.hostname_input.text().strip()
+        self.is_teacher = False
 
-        self.stacked.setCurrentIndex(3)
+        if not self.selected_building or not self.selected_room or not self.assigned_hostname:
+            QMessageBox.warning(self, "Champs requis", "Sélectionnez un bâtiment, une salle et saisissez un nom d'ordinateur.")
+            return
+
+        import re
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", self.assigned_hostname):
+            QMessageBox.warning(self, "Nom invalide", "Le nom d'ordinateur doit contenir uniquement lettres, chiffres et tirets.")
+            return
+
+        root_pwd = self.root_pwd_input.text().strip()
+        root_pwd_confirm = self.root_pwd_confirm_input.text().strip()
+        if root_pwd or root_pwd_confirm or os.getenv("LYUX_REQUIRE_ROOT_PASSWORD", "0") == "1":
+            if len(root_pwd) < 8:
+                QMessageBox.warning(self, "Mot de passe root", "Le mot de passe root doit contenir au moins 8 caractères.")
+                return
+            if root_pwd != root_pwd_confirm:
+                QMessageBox.warning(self, "Mot de passe root", "Les deux mots de passe root ne correspondent pas.")
+                return
+            try:
+                from maintenance import configure_root_only_access
+            except ImportError:
+                from .maintenance import configure_root_only_access
+            apply_sys = hasattr(os, "geteuid") and os.geteuid() == 0
+            ok_root, msg_root = configure_root_only_access(root_pwd, apply_system=apply_sys)
+            if not ok_root:
+                QMessageBox.warning(self, "Mot de passe root", msg_root)
+                return
+
+        try:
+            chk = requests.post(
+                f"{self.server_url}/api/v1/enroll/check-hostname",
+                json={"hostname": self.assigned_hostname},
+                timeout=3,
+            )
+            if chk.status_code == 200 and chk.json().get("available") is False:
+                QMessageBox.warning(self, "Nom déjà utilisé", f"Le nom '{self.assigned_hostname}' est déjà attribué sur le serveur.")
+                return
+        except Exception:
+            pass
+
+        self.install_back_btn.setVisible(False)
+        self.install_retry_btn.setVisible(False)
+        self.stacked.setCurrentIndex(2)
         self.progress_bar.setValue(5)
         self.log_box.setText(f"Démarrage de l'enrôlement pour {self.assigned_hostname}...")
 
@@ -610,7 +811,7 @@ class LyuxOOBEWindow(QMainWindow):
             self.selected_building,
             self.selected_room,
             self.assigned_hostname,
-            self.is_teacher
+            self.is_teacher,
         )
         self.install_worker.progress_signal.connect(self.on_install_progress)
         self.install_worker.finished_signal.connect(self.on_install_finished)
@@ -621,215 +822,34 @@ class LyuxOOBEWindow(QMainWindow):
         self.log_box.setText(text)
 
     def on_install_finished(self, success, data):
-        self.log_box.setText(f"✅ Configuration terminée ! Machine enregistrée : {self.assigned_hostname}")
-        self.install_status_lbl.setText("Redirection vers l'écran de session...")
-        QTimer.singleShot(1000, self.open_login_screen)
-
-    # -------------------------------------------------------------------------
-    # ÉTAPE 5 : ÉCRAN DE CONNEXION MULTI-COMPTES (SDDM / LYUX)
-    # -------------------------------------------------------------------------
-    def create_page_login(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        card = QFrame()
-        card.setObjectName("SetupCard")
-        card.setFixedSize(540, 560)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(40, 30, 40, 30)
-        card_layout.setSpacing(14)
-
-        # Header Badge
-        self.login_badge = QLabel("💻 Poste : b204-pc01 • Salle B204")
-        self.login_badge.setStyleSheet("font-size: 13px; color: #38BDF8; font-weight: bold; background: #0F172A; padding: 8px; border-radius: 8px;")
-        self.login_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_layout.addWidget(self.login_badge)
-
-        logo = QLabel("🐧 LyuX")
-        logo.setStyleSheet("font-size: 30px; font-weight: bold; color: #FFFFFF;")
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        card_layout.addWidget(logo)
-
-        card_layout.addWidget(QLabel("Sélectionner un compte du serveur :"))
-        self.user_selector = QComboBox()
-        self.accounts_map = {
-            "lyux-admin": {"name": "Administrateur Système", "role": "Admin Local (Secours / Maintenance)", "pwd": "LyuxAdmin2026!", "room": "ALL", "is_admin": True},
-            "invite": {"name": "Session Invité", "role": "Sans compte (Session Éphémère)", "pwd": "", "room": "LOCAL", "is_guest": True},
-            "thomas.durand": {"name": "M. Durand (Maths / NSI)", "role": "Enseignant (Veyon Master)", "pwd": "Prof2026!", "room": "B204", "is_teacher": True},
-            "sophie.leroy": {"name": "Mme. Leroy (Sciences)", "role": "Enseignante (Veyon Master)", "pwd": "Prof2026!", "room": "S102", "is_teacher": True},
-            "lucas.martin": {"name": "Lucas Martin", "role": "Élève (1G1 NSI)", "pwd": "Eleve2026!", "room": "B204"},
-            "emma.bernard": {"name": "Emma Bernard", "role": "Élève (1G1 NSI)", "pwd": "Eleve2026!", "room": "B204"},
-            "hugo.dubois": {"name": "Hugo Dubois", "role": "Élève (1G2 Sciences)", "pwd": "Eleve2026!", "room": "S102"},
-            "lea.thomas": {"name": "Léa Thomas", "role": "Élève (1G2 Sciences)", "pwd": "Eleve2026!", "room": "S102"},
-            "claire.viesco": {"name": "Claire Vie-Scolaire", "role": "Vie Scolaire", "pwd": "Viesco2026!", "room": "VIESCO"},
-        }
-        for u, d in self.accounts_map.items():
-            self.user_selector.addItem(f"{d['name']} — {d['role']}", u)
-        self.user_selector.currentIndexChanged.connect(self.on_login_user_changed)
-        card_layout.addWidget(self.user_selector)
-
-        card_layout.addWidget(QLabel("Identifiant :"))
-        self.login_id_input = QLineEdit()
-        card_layout.addWidget(self.login_id_input)
-
-        card_layout.addWidget(QLabel("Mot de passe :"))
-        self.login_pwd_input = QLineEdit()
-        self.login_pwd_input.setEchoMode(QLineEdit.EchoMode.Password)
-        card_layout.addWidget(self.login_pwd_input)
-
-        open_btn = QPushButton("Ouvrir la session KDE Plasma")
-        open_btn.setObjectName("PrimaryBtn")
-        open_btn.setFixedHeight(45)
-        open_btn.clicked.connect(self.perform_session_open)
-        card_layout.addWidget(open_btn)
-
-        reconfig_btn = QPushButton("⚙️ Reconfigurer la machine (OOBE)")
-        reconfig_btn.setStyleSheet("font-size: 11px; background: transparent; border: none; color: #94A3B8; text-decoration: underline;")
-        reconfig_btn.clicked.connect(lambda: self.stacked.setCurrentIndex(0))
-        card_layout.addWidget(reconfig_btn)
-
-        layout.addWidget(card)
-        self.on_login_user_changed(0)
-        return page
-
-    def open_login_screen(self):
-        self.login_badge.setText(f"💻 Poste : {self.assigned_hostname} • Salle {self.selected_room}")
-        self.stacked.setCurrentIndex(4)
-
-    def on_login_user_changed(self, idx):
-        u = self.user_selector.currentData()
-        if u in self.accounts_map:
-            self.login_id_input.setText(u)
-            self.login_pwd_input.setText(self.accounts_map[u]["pwd"])
-
-    def perform_session_open(self):
-        u = self.login_id_input.text().strip()
-        pwd = self.login_pwd_input.text()
-        if u in self.accounts_map:
-            self.current_user = self.accounts_map[u]
-            self.current_user["username"] = u
-            self.update_desktop()
-            self.stacked.setCurrentIndex(5)
+        if success:
+            self.install_title.setText("Poste enrôlé avec succès")
+            self.install_desc.setText(f"{self.assigned_hostname} enregistré sur {self.selected_building}/{self.selected_room}.")
+            self.log_box.setText(f"Enrôlement confirmé pour {self.assigned_hostname}. Ouverture de l'écran de connexion...")
+            if os.getenv("LYUX_OOBE_EXIT_ON_ENROLL", "0") == "1":
+                QTimer.singleShot(900, QApplication.instance().quit)
         else:
-            QMessageBox.warning(self, "Erreur", "Identifiant inconnu.")
+            detail = data.get("detail", "Erreur d'enrôlement.")
+            self.install_title.setText("Enrôlement non confirmé")
+            self.install_desc.setText("Aucun fichier d'enrôlement n'a été écrit. Corrigez puis réessayez.")
+            self.log_box.setText(detail)
+            self.install_back_btn.setVisible(True)
+            self.install_retry_btn.setVisible(True)
 
-    # -------------------------------------------------------------------------
-    # ÉCRAN FINAL : BUREAU KDE PLASMA
-    # -------------------------------------------------------------------------
-    def create_page_desktop(self):
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        # Surface
-        self.desktop_surface = QWidget()
-        self.desktop_surface.setStyleSheet("background-color: #0F172A;")
-        d_lay = QVBoxLayout(self.desktop_surface)
-        d_lay.setContentsMargins(30, 30, 30, 30)
-
-        # Top Bar
-        top_bar = QHBoxLayout()
-        self.desktop_host_badge = QLabel("💻 b204-pc01")
-        self.desktop_host_badge.setStyleSheet("color: #38BDF8; font-weight: bold; background: #1E293B; padding: 6px 14px; border-radius: 6px;")
-        self.desktop_user_badge = QLabel("👤 Lucas Martin")
-        self.desktop_user_badge.setStyleSheet("color: #34D399; font-weight: bold; background: #1E293B; padding: 6px 14px; border-radius: 6px;")
-        top_bar.addWidget(self.desktop_host_badge)
-        top_bar.addStretch()
-        top_bar.addWidget(self.desktop_user_badge)
-        d_lay.addLayout(top_bar)
-
-        # Icon Grid
-        self.desktop_grid = QGridLayout()
-        self.desktop_grid.setSpacing(15)
-        d_lay.addLayout(self.desktop_grid)
-        d_lay.addStretch()
-
-        lay.addWidget(self.desktop_surface)
-
-        # Bottom Bar
-        bottom = QFrame()
-        bottom.setStyleSheet("background: #0B0F19; border-top: 1px solid #1E293B;")
-        bottom.setFixedHeight(50)
-        b_lay = QHBoxLayout(bottom)
-        b_lay.setContentsMargins(15, 0, 15, 0)
-
-        k_btn = QPushButton("🐧 LyuX")
-        k_btn.setStyleSheet("background: #0284C7; color: white; font-weight: bold;")
-        b_lay.addWidget(k_btn)
-
-        status = QLabel("Session active • Données synchronisées sur le serveur")
-        status.setStyleSheet("color: #64748B; font-size: 11px;")
-        b_lay.addWidget(status)
-        b_lay.addStretch()
-
-        logout = QPushButton("Déconnexion")
-        logout.setStyleSheet("color: #F87171;")
-        logout.clicked.connect(lambda: self.stacked.setCurrentIndex(4))
-        b_lay.addWidget(logout)
-
-        lay.addWidget(bottom)
-        return page
-
-    def update_desktop(self):
-        if not self.current_user:
-            return
-        u = self.current_user
-        self.desktop_host_badge.setText(f"💻 Poste : {self.assigned_hostname} • Salle {self.selected_room}")
-        self.desktop_user_badge.setText(f"👤 {u['name']} ({u['role']})")
-
-        for i in reversed(range(self.desktop_grid.count())):
-            self.desktop_grid.itemAt(i).widget().setParent(None)
-
-        def add_card(icon, title, desc, col, row):
-            f = QFrame()
-            f.setStyleSheet("background: #1E293B; border: 1px solid #334155; border-radius: 12px; padding: 10px;")
-            l = QVBoxLayout(f)
-            t = QLabel(f"{icon} {title}")
-            t.setStyleSheet("font-weight: bold; color: #38BDF8; font-size: 13px;")
-            d = QLabel(desc)
-            d.setStyleSheet("color: #94A3B8; font-size: 11px;")
-            b = QPushButton("Ouvrir")
-            b.clicked.connect(lambda: QMessageBox.information(self, title, f"Accès à {title} pour {u['name']}\n\n{desc}"))
-            l.addWidget(t)
-            l.addWidget(d)
-            l.addWidget(b)
-            self.desktop_grid.addWidget(f, row, col)
-
-        if u.get("is_admin"):
-            add_card("🎛️", "Cockpit Admin (Système)", "Accès console http://localhost:9090", 0, 0)
-            add_card("👥", "LDAP Account Manager (LAM)", "Gestion comptes http://localhost:8082", 1, 0)
-            add_card("🎫", "GLPI Helpdesk & Parc", "Tickets & matériel http://localhost:8085", 2, 0)
-            add_card("📈", "Uptime Kuma (Monitoring)", "Supervision http://localhost:3001", 3, 0)
-            add_card("💻", "Terminal Root (Sudo)", "Maintenance système locale", 0, 1)
-            add_card("⚙️", "Configuration Réseau & Salles", "Profils Ansible et liaisons", 1, 1)
-        elif u.get("is_teacher"):
-            add_card("👁️", f"Veyon Master ({self.selected_room})", f"Supervision en direct de la salle {self.selected_room}", 0, 0)
-            add_card("📤", "Distribution de Cours (Écriture)", f"//serveur/classes/{self.selected_room}/Distribution", 1, 0)
-            add_card("📥", "Dépôts des Devoirs Élèves", f"//serveur/classes/{self.selected_room}/Depot_Devoirs", 2, 0)
-            add_card("📁", "Espace Personnel (20 Go)", f"//serveur/homes/{u['username']}", 3, 0)
-            add_card("🆘", "Signaler Incident GLPI", "Création de ticket prioritaire", 0, 1)
-            add_card("🚀", "Logiciels Matière", "Thonny, VS Code, Avogadro, Tracker", 1, 1)
-        elif u.get("is_guest"):
-            add_card("⏱️", "Session Éphémère", "Fichiers temporaires supprimés au logout", 0, 0)
-            add_card("📝", "LibreOffice Writer", "Traitement de texte local", 1, 0)
-            add_card("📊", "LibreOffice Calc", "Tableur local", 2, 0)
-            add_card("🐍", "Python 3 & Thonny IDE", "Programmation locale", 3, 0)
-        else:
-            # Élève
-            add_card("📁", "Espace Personnel (5 Go)", f"Montage transparent //serveur/homes/{u['username']}", 0, 0)
-            add_card("📚", "Partage de Classe (Lecture)", f"//serveur/classes/{self.selected_room}/Distribution", 1, 0)
-            add_card("📬", "Rendre un Devoir (Dépôt)", f"Boîte aux lettres //serveur/classes/{self.selected_room}/Depot_Devoirs", 2, 0)
-            add_card("🆘", "Signaler Incident GLPI", "Création de ticket matériel", 3, 0)
-            add_card("🚀", "Logiciels Préinstallés", "Python, VS Code, LibreOffice, GIMP", 0, 1)
-            add_card("🌐", "Navigateur Sécurisé", "Firefox ESR avec filtres scolaires", 1, 1)
 
 def main():
     app = QApplication(sys.argv)
     win = LyuxOOBEWindow()
-    win.show()
+    if os.getenv("LYUX_OOBE_EXIT_ON_ENROLL", "0") == "1":
+        win.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        screen = app.primaryScreen()
+        if screen is not None:
+            win.setGeometry(screen.geometry())
+        win.showFullScreen()
+    else:
+        win.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "build": "20261123",
+  "release_date": "2026-11-23T21:30:00Z",
+  "channel": "stable",
+  "files": [
+    {
+      "url": "lyux-client-installer-latest.iso",
+      "sha256": "D6DE2AE09A1C6F458109737C599B52CA9C1B487218BFA13BB1FC44626BC8BDA8",
+      "size": 1056235520,
+      "kind": "client-netinst-iso"
+    },
+    {
+      "url": "lyux-client-autonomous-installer.iso",
+      "sha256": "9CFD04335AC928373C6A9B3F393C92C49446E8197DE150E3A57FA6893EBD40FF",
+      "size": 3646717952,
+      "kind": "client-iso"
+    },
+    {
+      "url": "lyux-installer.sh",
+      "kind": "installer-script"
+    },
+    {
+      "url": "create-overlay-iso.sh",
+      "kind": "build-tool"
+    }
+  ],
+  "components": {
+    "kde_plasma": "6.3.6",
+    "base_system": "Debian GNU/Linux 13 (Trixie)",
+    "kernel": "6.12.107+deb13-amd64"
+  }
+}

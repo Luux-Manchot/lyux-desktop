@@ -1,0 +1,15 @@
+{
+  "schema": "lyux-release-manifest",
+  "schema_version": 1,
+  "version": "1.0.0",
+  "channel": "stable",
+  "prerelease": false,
+  "published_at": "2026-11-25T20:23:37+00:00",
+  "components": {
+    "lyux_desktop": "1.0.0",
+    "lyux_server": "0.5.0-beta.1",
+    "os_builder": "0.5.0-beta.1"
+  },
+  "iso": null,
+  "notes": "Migration depuis lyux-os-builder v1.0.0 (Autonomous Installer)"
+}

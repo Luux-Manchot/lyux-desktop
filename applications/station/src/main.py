@@ -20,10 +20,10 @@ try:
     from veyon_manager import VeyonManager
 except ImportError:
     try:
-        from applications.lyux_station.src.veyon_manager import VeyonManager
+        from .veyon_manager import VeyonManager
     except ImportError:
         try:
-            from projects.lyux_station.src.veyon_manager import VeyonManager
+            from applications.station.src.veyon_manager import VeyonManager
         except ImportError:
             VeyonManager = None
 
@@ -98,8 +98,8 @@ class LyuxUnifiedApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_user = None
-        self.current_room = "B204"
-        self.assigned_hostname = "b204-pc01"
+        self.current_room = "B24"
+        self.assigned_hostname = "b24-pc01"
         self.api_url = "http://127.0.0.1:8000"
         self.veyon_mgr = VeyonManager(api_url=self.api_url) if VeyonManager else None
 
