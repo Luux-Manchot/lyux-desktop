@@ -54,3 +54,92 @@ def test_pam_session_hook_syncs_documents_and_kde_config_between_pcs(tmp_path):
     assert handle_pam_event("open_session", "lucas.martin", local_home=pc2_home, nas_home=nas_home) == 0
     assert (pc2_home / "Documents" / "devoir.txt").read_text(encoding="utf-8") == "mon devoir"
     assert (pc2_home / ".config" / "plasma-org.kde.plasma.desktop-appletsrc").read_text(encoding="utf-8") == "Image=lyux-ocean.png"
+
+
+def test_nss_user_sync_writes_extrausers_and_nsswitch(tmp_path, monkeypatch):
+    import json
+    import nss_user_sync
+
+    state_file = tmp_path / "enrollment-state.json"
+    state_file.write_text(json.dumps({"server_url": "http://192.168.10.1:8000"}), encoding="utf-8")
+
+    nsswitch = tmp_path / "nsswitch.conf"
+    nsswitch.write_text("passwd: files systemd\ngroup: files systemd\nshadow: files\n", encoding="utf-8")
+    extra_dir = tmp_path / "extrausers"
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "users": [
+                    {
+                        "username": "camille.dupont",
+                        "uid": 10421,
+                        "gid": 10421,
+                        "display_name": "Camille Dupont",
+                        "home": "/home/camille.dupont",
+                        "shell": "/bin/bash",
+                    }
+                ]
+            }).encode("utf-8")
+
+    monkeypatch.setattr(nss_user_sync, "urlopen", lambda req, timeout=5.0: _FakeResp())
+    count = nss_user_sync.sync_nss_users(state_path=state_file, extrausers_dir=extra_dir, nsswitch_path=nsswitch)
+    assert count == 1
+
+    assert "camille.dupont:x:10421:10421:Camille Dupont:/home/camille.dupont:/bin/bash" in (extra_dir / "passwd").read_text(encoding="utf-8")
+    assert "camille.dupont:x:10421:" in (extra_dir / "group").read_text(encoding="utf-8")
+    assert "camille.dupont:*:" in (extra_dir / "shadow").read_text(encoding="utf-8")
+    nss_text = nsswitch.read_text(encoding="utf-8")
+    assert "passwd: files systemd extrausers" in nss_text
+    assert "group: files systemd extrausers" in nss_text
+    assert "shadow: files extrausers" in nss_text
+
+
+def test_pam_auth_hook_authenticates_and_creates_home(tmp_path, monkeypatch):
+    import json
+    import pam_auth_hook
+
+    state_file = tmp_path / "enrollment-state.json"
+    state_file.write_text(json.dumps({"server_url": "http://192.168.10.1:8000"}), encoding="utf-8")
+    extra_dir = tmp_path / "extrausers"
+    home_root = tmp_path / "home"
+
+    # root doit toujours retomber sur pam_unix local
+    ok_root, reason_root = pam_auth_hook.authenticate_desktop_user("root", "secret", state_path=state_file)
+    assert ok_root is False
+    assert reason_root == "local-fallback"
+
+    class _FakeAuthResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "authenticated": True,
+                "username": "camille.dupont",
+                "uid": 10421,
+                "effective_role": "eleve",
+            }).encode("utf-8")
+
+    monkeypatch.setattr(pam_auth_hook, "urlopen", lambda req, timeout=5.0: _FakeAuthResp())
+    monkeypatch.setattr(pam_auth_hook, "sync_nss_users", lambda **kwargs: 1)
+
+    ok, msg = pam_auth_hook.authenticate_desktop_user(
+        "camille.dupont",
+        "TestPassword2026!",
+        state_path=state_file,
+        extrausers_dir=extra_dir,
+        home_root=home_root,
+    )
+    assert ok is True
+    assert msg == "ok"
+    assert (home_root / "camille.dupont").is_dir()
