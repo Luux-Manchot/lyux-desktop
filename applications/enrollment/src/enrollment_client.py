@@ -342,6 +342,88 @@ def inspect_server(target_url: Optional[str] = None, timeout_sec: float = 2.5) -
     return {"state": last_status, "detail": last_detail, "ifaces": ifaces}
 
 
+def _configure_pam_nss_after_enrollment(server_url: str) -> None:
+    """
+    Configure PAM (common-auth + common-session), NSS (nsswitch.conf + extrausers)
+    et active le timer de synchronisation NSS après enrôlement réussi.
+    Idempotent : ne modifie que ce qui manque.
+    """
+    logger = get_oobe_logger()
+
+    PAM_AUTH = Path("/etc/pam.d/common-auth")
+    PAM_SESSION = Path("/etc/pam.d/common-session")
+    NSSWITCH = Path("/etc/nsswitch.conf")
+    EXTRA_DIR = Path("/var/lib/extrausers")
+    PAM_AUTH_HOOK = "/opt/lyux/apps/enrollment/scripts/lyux-pam-auth.sh"
+    PAM_SESSION_HOOK = "/opt/lyux/apps/enrollment/scripts/lyux-pam-session.sh"
+    NSS_SYNC = "/opt/lyux/apps/enrollment/src/nss_user_sync.py"
+
+    # 1. PAM auth : ajouter notre hook si absent
+    if PAM_AUTH.exists() and Path(PAM_AUTH_HOOK).exists():
+        content = PAM_AUTH.read_text(encoding="utf-8")
+        if PAM_AUTH_HOOK not in content:
+            PAM_AUTH.write_text(
+                f"auth sufficient pam_exec.so expose_authtok quiet {PAM_AUTH_HOOK}\n" + content,
+                encoding="utf-8",
+            )
+            logger.info("PAM common-auth : hook lyux-pam-auth.sh ajouté.")
+
+    # 2. PAM session : ajouter notre hook si absent
+    if PAM_SESSION.exists() and Path(PAM_SESSION_HOOK).exists():
+        content = PAM_SESSION.read_text(encoding="utf-8")
+        if PAM_SESSION_HOOK not in content:
+            with PAM_SESSION.open("a", encoding="utf-8") as f:
+                f.write(f"session requisite pam_exec.so {PAM_SESSION_HOOK}\n")
+            logger.info("PAM common-session : hook lyux-pam-session.sh ajouté.")
+
+    # 3. NSS : ajouter extrausers à passwd/group/shadow si absent
+    if NSSWITCH.exists():
+        lines = NSSWITCH.read_text(encoding="utf-8").splitlines()
+        changed = False
+        updated = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith(("passwd:", "group:", "shadow:")) and "extrausers" not in stripped.split():
+                updated.append(f"{line.rstrip()} extrausers")
+                changed = True
+            else:
+                updated.append(line)
+        if changed:
+            NSSWITCH.write_text("\n".join(updated) + "\n", encoding="utf-8")
+            logger.info("nsswitch.conf : extrausers ajouté.")
+
+    # 4. Répertoire extrausers
+    EXTRA_DIR.mkdir(parents=True, exist_ok=True)
+    for fname in ("passwd", "group", "shadow"):
+        p = EXTRA_DIR / fname
+        if not p.exists():
+            p.write_text("", encoding="utf-8")
+    try:
+        import os as _os
+        _os.chmod(EXTRA_DIR / "shadow", 0o600)
+    except OSError:
+        pass
+
+    # 5. Timer systemd lyux-nss-sync
+    for unit in ("lyux-nss-sync.service", "lyux-nss-sync.timer"):
+        src = Path(f"/opt/lyux/apps/enrollment/systemd/{unit}")
+        dst = Path(f"/lib/systemd/system/{unit}")
+        if src.exists() and not dst.exists():
+            import shutil as _shutil
+            _shutil.copy2(src, dst)
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    subprocess.run(["systemctl", "enable", "--now", "lyux-nss-sync.timer"], check=False)
+    logger.info("Timer lyux-nss-sync activé.")
+
+    # 6. Première synchronisation NSS immédiate
+    if Path(NSS_SYNC).exists():
+        try:
+            subprocess.run(["python3", NSS_SYNC], check=False, timeout=10)
+            logger.info("Première synchronisation NSS effectuée.")
+        except Exception as exc:
+            logger.warning("Sync NSS initiale échouée : %s", exc)
+
+
 def perform_enrollment(
     server_url: str,
     building_id: str,
@@ -470,6 +552,8 @@ def perform_enrollment(
             subprocess.run(["systemctl", "disable", "lyux-enrollment.service"], check=False)
         except Exception:
             pass
+        # Configurer PAM + NSS + timer au moment de l'enrôlement
+        _configure_pam_nss_after_enrollment(norm_url)
 
     if fb_flag.exists():
         try:
