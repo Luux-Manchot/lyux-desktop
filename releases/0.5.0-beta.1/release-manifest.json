@@ -4,11 +4,18 @@
   "version": "0.5.0-beta.1",
   "channel": "beta",
   "prerelease": true,
-  "published_at": "2026-11-25T20:33:59+00:00",
+  "published_at": "2026-11-26T16:31:02+00:00",
   "components": {
     "lyux_desktop": "0.5.0-beta.1",
     "lyux_server": "0.5.0-beta.1",
-    "os_builder": "0.5.0-beta.1"
+    "os_builder": "0.5.0-beta.1",
+    "debian_target": "13.8",
+    "kde_target": "6.3"
+  },
+  "deb_package": {
+    "filename": "lyux-desktop-core_0.5.0-beta.1_all.deb",
+    "sha256": "63b1b62ce3ec6f32822055eacef506664e40c035942c7c0cbfc268728baa8a54",
+    "size_bytes": 28900
   },
   "iso": {
     "filename": "lyux-desktop-0.5.0-beta.1.iso",
