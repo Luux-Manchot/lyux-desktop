@@ -16,9 +16,14 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
+try:
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+except ImportError:  # pragma: no cover
+    InvalidSignature = Exception
+    serialization = None
+    ed25519 = None
 
 try:
     from discovery import validate_server_url
