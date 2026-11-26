@@ -1,0 +1,26 @@
+{
+  "schema": "lyux-release-manifest",
+  "schema_version": 1,
+  "version": "0.5.0-beta.2",
+  "channel": "beta",
+  "prerelease": true,
+  "published_at": "2026-11-26T18:34:00+00:00",
+  "components": {
+    "lyux_desktop": "0.5.0-beta.2",
+    "lyux_server": "0.5.0-beta.2",
+    "os_builder": "0.5.0-beta.2",
+    "debian_target": "13.8",
+    "kde_target": "6.3"
+  },
+  "deb_package": {
+    "filename": "lyux-desktop-core_0.5.0-beta.2_all.deb",
+    "sha256": "a18c3a96f80ec8877e2d7f473644320c17d6d88c625a68dcbc0cc76add011a06",
+    "size_bytes": 31746
+  },
+  "iso": {
+    "filename": "lyux-desktop-0.5.0-beta.2.iso",
+    "sha256": "b68ccbb207e0c95e1982ef76d6ceb3d401f4a87e0a0b65ee7f21819b1af9fe79",
+    "size_bytes": 1056321536
+  },
+  "notes": "LyuX 0.5.0-beta.2 : connexion Desktop SDDM (NSS + PAM), SSH active par defaut, creation/modification/suppression utilisateurs."
+}
