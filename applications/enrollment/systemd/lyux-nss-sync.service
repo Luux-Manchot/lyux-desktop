@@ -1,0 +1,10 @@
+[Unit]
+Description=Synchronisation NSS utilisateurs LyuX (libnss-extrausers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/lyux/apps/enrollment/src/nss_user_sync.py
+StandardOutput=journal
+StandardError=journal

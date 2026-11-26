@@ -33,6 +33,9 @@ def authenticate_desktop_user(
     if not username or username == "root" or not password:
         return False, "local-fallback"
 
+    # Synchroniser NSS AVANT l'auth pour que le compte soit déjà connu de SDDM
+    sync_nss_users(state_path=state_path, extrausers_dir=extrausers_dir)
+
     server_url = load_server_url(state_path)
     if not server_url:
         return False, "unconfigured"
