@@ -18,6 +18,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -652,6 +653,10 @@ class LyuxOOBEWindow(QMainWindow):
         )
         lay.addWidget(key_notice)
 
+        self.disable_ssh_checkbox = QCheckBox("Désactiver l'accès SSH après l'enrôlement (recommandé en salle élèves)")
+        self.disable_ssh_checkbox.setChecked(False)
+        lay.addWidget(self.disable_ssh_checkbox)
+
         lay.addStretch()
 
         nav = QHBoxLayout()
@@ -787,6 +792,11 @@ class LyuxOOBEWindow(QMainWindow):
             if not ok_root:
                 QMessageBox.warning(self, "Mot de passe root", msg_root)
                 return
+
+        if getattr(self, "disable_ssh_checkbox", None) and self.disable_ssh_checkbox.isChecked():
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                import subprocess
+                subprocess.run(["systemctl", "disable", "--now", "ssh"], check=False)
 
         try:
             chk = requests.post(
