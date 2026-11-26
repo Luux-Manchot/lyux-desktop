@@ -1,22 +1,26 @@
 {
   "schema": "lyux-release-manifest",
   "schema_version": 1,
-  "version": "0.5.0-beta.2",
+  "version": "0.5.0-beta.3",
   "channel": "beta",
   "prerelease": true,
-  "published_at": "2026-11-26T19:22:32+00:00",
+  "published_at": "2026-11-26T21:32:28+00:00",
   "components": {
-    "lyux_desktop": "0.5.0-beta.2",
-    "lyux_server": "0.5.0-beta.2",
-    "os_builder": "0.5.0-beta.2",
+    "lyux_desktop": "0.5.0-beta.3",
+    "lyux_server": "0.5.0-beta.3",
+    "os_builder": "0.5.0-beta.3",
     "debian_target": "13.8",
     "kde_target": "6.3"
   },
   "deb_package": {
-    "filename": "lyux-desktop-core_0.5.0-beta.2_all.deb",
-    "sha256": "5afbaa062e0670923bf9515d706b82947815afbe4e8ed8f6ddf112d49b9fb86d",
+    "filename": "lyux-desktop-core_0.5.0-beta.3_all.deb",
+    "sha256": "ddb3ef39b6ef724c0e3969ad21f96da75ab1478deade9e07ba7d2d764f27b670",
     "size_bytes": 33616
   },
-  "iso": null,
-  "notes": "LyuX 0.5.0-beta.2 : PAM+NSS auto-configure a l'enrolement, plus besoin de commande manuelle"
+  "iso": {
+    "filename": "lyux-desktop-0.5.0-beta.3.iso",
+    "sha256": "c5c0a1d789ab16ed2e580610a528ddef9feecf2427b28bc0492d39c9ebedeaff",
+    "size_bytes": 1056333824
+  },
+  "notes": "LyuX 0.5.0-beta.3 : configuration PAM/NSS + timer lyux-nss-sync automatique des l'enrolement, droits +x garantis dans preseed."
 }
