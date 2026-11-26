@@ -25,4 +25,4 @@ python report/src/system_info.py
 
 ## Déploiement
 
-Ces applications sont installées dans `/opt/lyux/apps/<nom>/` par la chaîne de build (voir [`../docs/METHODE_BUILD_CLIENT.md`](../docs/METHODE_BUILD_CLIENT.md)). Les lanceurs `.desktop` pointent vers `/opt/lyux/apps/welcome/src/main.py` et `/opt/lyux/apps/report/src/main.py`.
+Ces applications sont installées dans `/opt/lyux/apps/<nom>/` par la chaîne de build (voir [`lyux-os-builder/docs/METHODE_BUILD_CLIENT.md`](https://github.com/Luux-Manchot/lyux-os-builder/blob/master/docs/METHODE_BUILD_CLIENT.md)). Les lanceurs `.desktop` pointent vers `/opt/lyux/apps/welcome/src/main.py` et `/opt/lyux/apps/report/src/main.py`.

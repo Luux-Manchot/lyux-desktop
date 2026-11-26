@@ -6,8 +6,11 @@ Ce sous-dossier regroupe toutes les configurations graphiques, thèmes et règle
 
 ## 📘 Documentation
 
-- [Méthode de build du client](docs/METHODE_BUILD_CLIENT.md) — Debian + KDE, Ansible, capture master, overlay ISO, et où intégrer les anciens scripts de `client/`.
-- [Comment créer un poste](docs/COMMENT_CREER_UN_POSTE.md) — procédure pas-à-pas de l'ISO à la machine installée, vérifications et dépannage.
+> 📚 **Documentation complète → [wiki `lyux-desktop`](https://github.com/Luux-Manchot/lyux-desktop/wiki)** : applications, création de poste, compatibilité logicielle, déploiement en salle, dépannage console (TTY).
+
+- [Méthode de build du client](https://github.com/Luux-Manchot/lyux-os-builder/blob/master/docs/METHODE_BUILD_CLIENT.md) — Debian + KDE, Ansible, capture master, overlay ISO *(doc build : repo `lyux-os-builder`)*.
+- [Créer un poste](https://github.com/Luux-Manchot/lyux-desktop/wiki/Creer-un-poste-client) — procédure pas-à-pas de l'ISO à la machine installée, vérifications et dépannage.
+- [Logiciels et compatibilité](https://github.com/Luux-Manchot/lyux-desktop/wiki/Logiciels-et-compatibilite) — matrice Windows → Linux et alternatives retenues.
 
 ## Applications
 
