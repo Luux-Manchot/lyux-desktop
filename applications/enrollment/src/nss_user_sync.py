@@ -122,6 +122,11 @@ def sync_nss_users(
             sync_client_packages(server_url)
         except Exception:
             pass
+        try:
+            from update_policy_sync import sync_update_policy
+            sync_update_policy(server_url)
+        except Exception:
+            pass
     return count
 
 

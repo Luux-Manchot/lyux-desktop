@@ -1,0 +1,26 @@
+{
+  "schema": "lyux-release-manifest",
+  "schema_version": 1,
+  "version": "0.5.0-beta.4",
+  "channel": "beta",
+  "prerelease": true,
+  "published_at": "2026-11-27T13:09:04+00:00",
+  "components": {
+    "lyux_desktop": "0.5.0-beta.4",
+    "lyux_server": "0.5.0-beta.4",
+    "os_builder": "0.5.0-beta.4",
+    "debian_target": "13.8",
+    "kde_target": "6.3"
+  },
+  "deb_package": {
+    "filename": "lyux-desktop-core_0.5.0-beta.4_all.deb",
+    "sha256": "5241fac12385ef97b1cfecabc8b8d96161254962b8d22b8a603c50cf6398becc",
+    "size_bytes": 33358
+  },
+  "iso": {
+    "filename": "lyux-desktop-0.5.0-beta.4.iso",
+    "sha256": "79b66d0096fa3b48e99a3dd1db109e2c153ca78b4129ea4262f19a16a015d10c",
+    "size_bytes": 1056327680
+  },
+  "notes": "Release beta 0.5.0-beta.4 : correction fins de ligne LF pour scripts OOBE/PAM et normalisation ISO/.deb"
+}
