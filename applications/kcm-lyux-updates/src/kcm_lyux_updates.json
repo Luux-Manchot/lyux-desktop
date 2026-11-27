@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Description": "Versions Debian, KDE et LyuX contrôlées par le serveur",
+        "Icon": "system-software-update",
+        "Id": "kcm_lyux_updates",
+        "Name": "Mises à jour LyuX"
+    },
+    "X-KDE-Keywords": "updates,mises à jour,lyux,debian,kde,serveur",
+    "X-KDE-ParentApp": "kcontrol",
+    "X-KDE-System-Settings-Parent-Category": "system-administration",
+    "X-KDE-Weight": 10
+}
