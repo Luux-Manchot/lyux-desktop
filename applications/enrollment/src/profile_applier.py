@@ -21,8 +21,10 @@ try:
         ACTIVE_PROFILE_DIR,
         BACKUP_PROFILE_DIR,
         PROFILE_STATE_FILE,
+        TRUSTED_KEYS_FILE,
         apply_verified_manifest,
         load_profile_state,
+        load_trusted_public_keys,
         rollback_profile,
         save_profile_state,
     )
@@ -31,8 +33,10 @@ except ImportError:
         ACTIVE_PROFILE_DIR,
         BACKUP_PROFILE_DIR,
         PROFILE_STATE_FILE,
+        TRUSTED_KEYS_FILE,
         apply_verified_manifest,
         load_profile_state,
+        load_trusted_public_keys,
         rollback_profile,
         save_profile_state,
     )
@@ -117,19 +121,15 @@ def sync_and_apply_profile(
     active_dir: Optional[Path] = None,
     backup_dir: Optional[Path] = None,
     sddm_conf_dir: Optional[Path] = None,
+    trusted_keys_file: Optional[Path] = None,
 ) -> Dict[str, Any]:
     st_file = state_file or PROFILE_STATE_FILE
     act_dir = active_dir or ACTIVE_PROFILE_DIR
     bak_dir = backup_dir or BACKUP_PROFILE_DIR
 
-    keys = dict(public_keys or {})
+    keys = dict(public_keys) if public_keys else load_trusted_public_keys(trusted_keys_file or TRUSTED_KEYS_FILE)
     if not keys:
-        try:
-            kr = requests.get(f"{server_url.rstrip('/')}/api/v1/client/public-keys", timeout=5)
-            if kr.status_code == 200:
-                keys = {k["key_id"]: k["public_key_pem"] for k in kr.json().get("keys", [])}
-        except Exception as exc:
-            return {"ok": False, "state": "failed", "detail": f"Clés publiques inaccessibles : {exc}"}
+        return {"ok": False, "state": "failed", "detail": "Trousseau local de clés publiques absent ou vide."}
 
     try:
         mr = requests.get(
@@ -196,8 +196,12 @@ def sync_and_apply_profile(
             if deb_installer is not None:
                 ok_deb, msg_deb = deb_installer(deb_path)
             else:
-                r = subprocess.run(["dpkg", "-i", str(deb_path)], capture_output=True, text=True, timeout=60)
-                ok_deb, msg_deb = (r.returncode == 0), r.stderr or r.stdout
+                meta = subprocess.run(["dpkg-deb", "-f", str(deb_path), "Package"], capture_output=True, text=True, timeout=15)
+                if meta.returncode != 0 or meta.stdout.strip() != art.get("package"):
+                    ok_deb, msg_deb = False, f"Métadonnée Package incohérente ({meta.stdout.strip()})"
+                else:
+                    r = subprocess.run(["dpkg", "-i", str(deb_path)], capture_output=True, text=True, timeout=60)
+                    ok_deb, msg_deb = (r.returncode == 0), r.stderr or r.stdout
             if not ok_deb:
                 if prev_good_profile:
                     save_profile_state(

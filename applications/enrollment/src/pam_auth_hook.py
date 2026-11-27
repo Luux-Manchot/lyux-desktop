@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import socket
+import ssl
 import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from nss_user_sync import DEFAULT_EXTRAUSERS_DIR, DEFAULT_STATE_PATH, load_server_url, sync_nss_users
@@ -55,6 +59,56 @@ def _populate_home_from_skel(home_dir: Path, uid: int, skel_dir: Path = Path("/e
                     pass
 
 
+_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9._-]{0,31}$")
+_EXCLUDED_LOCAL_USERS = frozenset({"root", "lyux-admin", "nobody", "daemon", "sync", "sys"})
+_MIN_UID = 1000
+_MAX_UID = 60000
+
+
+def _is_valid_pam_username(username: str) -> bool:
+    return bool(username and username not in _EXCLUDED_LOCAL_USERS and _USERNAME_RE.match(username))
+
+
+def _is_secure_auth_url(url: str) -> bool:
+    """Impose HTTPS pour l'authentification PAM, sauf loopback explicite (dev)."""
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme == "https":
+        return bool(parsed.netloc)
+    if parsed.scheme == "http":
+        return (parsed.hostname or "").lower() in ("127.0.0.1", "localhost", "::1")
+    return False
+
+
+def _load_tls_pin_config(state_path: Path) -> tuple[str | None, str | None]:
+    """Lit ca_cert_path et tls_cert_sha256 depuis l'état d'enrôlement."""
+    if not state_path.exists():
+        return None, None
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    ca_path = str(data.get("ca_cert_path") or "").strip() or None
+    pin_sha256 = str(data.get("tls_cert_sha256") or "").strip().lower() or None
+    return ca_path, pin_sha256
+
+
+def _verify_pinned_cert(url: str, expected_sha256: str, ca_path: str | None, timeout: float) -> bool:
+    """Vérifie l'empreinte SHA-256 du certificat TLS présenté par le serveur."""
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or 443
+    ctx = ssl.create_default_context(cafile=ca_path) if ca_path else ssl.create_default_context()
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            der_cert = ssock.getpeercert(binary_form=True)
+    if not der_cert:
+        return False
+    actual = hashlib.sha256(der_cert).hexdigest().lower()
+    return actual == expected_sha256
+
+
 def authenticate_desktop_user(
     username: str,
     password: str,
@@ -64,15 +118,29 @@ def authenticate_desktop_user(
     timeout: float = 5.0,
 ) -> tuple[bool, str]:
     """Vérifie les identifiants auprès de lyux-api et prépare /home/<username>."""
-    if not username or username == "root" or not password:
+    if not password:
         return False, "local-fallback"
-
-    # Synchroniser NSS AVANT l'auth pour que le compte soit déjà connu de SDDM
-    sync_nss_users(state_path=state_path, extrausers_dir=extrausers_dir)
+    if username in _EXCLUDED_LOCAL_USERS:
+        return False, "local-fallback"
+    if not _is_valid_pam_username(username):
+        return False, "invalid-username"
 
     server_url = load_server_url(state_path)
     if not server_url:
         return False, "unconfigured"
+    if not _is_secure_auth_url(server_url):
+        return False, "insecure-transport"
+
+    ca_path, pin_sha256 = _load_tls_pin_config(state_path)
+    if server_url.startswith("https://") and pin_sha256:
+        try:
+            if not _verify_pinned_cert(server_url, pin_sha256, ca_path, timeout):
+                return False, "tls-pin-mismatch"
+        except (OSError, ssl.SSLError, ValueError) as exc:
+            return False, f"tls-error: {exc}"
+
+    # Synchroniser NSS AVANT l'auth pour que le compte soit déjà connu de SDDM
+    sync_nss_users(state_path=state_path, extrausers_dir=extrausers_dir)
 
     payload = json.dumps({
         "username": username,
@@ -88,7 +156,12 @@ def authenticate_desktop_user(
     )
 
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        if ca_path and server_url.startswith("https://"):
+            ssl_ctx = ssl.create_default_context(cafile=ca_path)
+            resp_ctx = urlopen(req, timeout=timeout, context=ssl_ctx)
+        else:
+            resp_ctx = urlopen(req, timeout=timeout)
+        with resp_ctx as resp:
             data: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
     except HTTPError as exc:
         try:
@@ -102,9 +175,15 @@ def authenticate_desktop_user(
     if not data.get("authenticated"):
         return False, "rejected"
 
+    try:
+        uid = int(data.get("uid", 0) or 0)
+    except (TypeError, ValueError):
+        return False, "invalid-uid"
+    if not (_MIN_UID <= uid <= _MAX_UID):
+        return False, "invalid-uid"
+
     sync_nss_users(state_path=state_path, extrausers_dir=extrausers_dir)
 
-    uid = int(data.get("uid", 0) or 0)
     home_dir = home_root / username
     home_dir.mkdir(parents=True, exist_ok=True)
     if uid > 0 and hasattr(os, "chown"):

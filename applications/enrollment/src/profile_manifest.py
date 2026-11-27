@@ -128,6 +128,27 @@ def is_approved_url(url: str) -> bool:
     return any(url.startswith(prefix) for prefix in _approved_sources())
 
 
+def load_trusted_public_keys(trusted_keys_file: Optional[Path] = None) -> Dict[str, str]:
+    """Charge uniquement les clés publiques de confiance déployées hors bande localement."""
+    target = trusted_keys_file or TRUSTED_KEYS_FILE
+    if not target.exists():
+        return {}
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    keys: Dict[str, str] = {}
+    if isinstance(raw, dict) and isinstance(raw.get("keys"), list):
+        for entry in raw["keys"]:
+            if isinstance(entry, dict) and entry.get("key_id") and entry.get("public_key_pem"):
+                keys[str(entry["key_id"])] = str(entry["public_key_pem"])
+    elif isinstance(raw, dict):
+        for k, v in raw.items():
+            if isinstance(k, str) and isinstance(v, str) and "PUBLIC KEY" in v:
+                keys[k] = v
+    return keys
+
+
 def verify_ed25519(manifest: Dict[str, Any], signature_b64: str, public_key_pem: str) -> bool:
     if not signature_b64 or not public_key_pem:
         return False
@@ -198,10 +219,17 @@ def validate_manifest(
             return False, "Champ libre command/script interdit."
         if art.get("type") not in ALLOWED_ARTIFACT_TYPES:
             return False, f"Type d'artefact refusé : {art.get('type')}"
-        if art.get("type") == "deb" and art.get("package") and art["package"] not in APPROVED_DEBIAN_PACKAGES:
-            return False, f"Paquet Debian hors catalogue approuvé : {art['package']}"
-        if art.get("type") == "flatpak" and art.get("flatpak_id") and art["flatpak_id"] not in APPROVED_FLATPAKS:
-            return False, f"Flatpak hors catalogue approuvé : {art['flatpak_id']}"
+        if art.get("type") == "deb":
+            pkg = art.get("package")
+            if not pkg or not isinstance(pkg, str) or pkg not in APPROVED_DEBIAN_PACKAGES:
+                return False, f"Paquet Debian manquant ou hors catalogue approuvé : {pkg}"
+            arch = art.get("architecture")
+            if arch is not None and arch not in ("all", "amd64"):
+                return False, f"Architecture Debian non approuvée : {arch}"
+        if art.get("type") == "flatpak":
+            fid = art.get("flatpak_id")
+            if not fid or not isinstance(fid, str) or fid not in APPROVED_FLATPAKS:
+                return False, f"Flatpak manquant ou hors catalogue approuvé : {fid}"
         if not is_approved_url(art.get("url", "")):
             return False, f"Source non approuvée : {art.get('url')}"
         if not _SHA256_RE.match(str(art.get("sha256", ""))):
@@ -210,8 +238,9 @@ def validate_manifest(
             return False, f"Taille invalide pour {art.get('name')}"
 
     sig = manifest.get("signature", "")
-    candidates = [public_keys[key_id]] if key_id and key_id in public_keys else list(public_keys.values())
-    if not sig or not any(verify_ed25519(manifest, sig, pem) for pem in candidates):
+    if not public_keys or not key_id or key_id not in public_keys:
+        return False, "Clé de signature inconnue ou trousseau local absent."
+    if not sig or not verify_ed25519(manifest, sig, public_keys[key_id]):
         return False, "Signature Ed25519 invalide ou absente."
 
     return True, "OK"

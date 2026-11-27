@@ -33,9 +33,11 @@ def get_candidate_server_urls() -> List[str]:
         candidates.append(env_url)
     gw = _default_gateway_ip()
     if gw:
-        candidates.append(f"http://{gw}:8000")
+        candidates.append(f"https://{gw}")
+        candidates.append(f"https://{gw}:8443")
     candidates.extend([
-        "http://lyux-server:8000",
+        "https://lyux-server",
+        "https://api.lyux.lan",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
     ])
@@ -55,7 +57,7 @@ def validate_server_url(raw_url: str) -> Tuple[bool, str, str]:
     if not cleaned:
         return False, "", "Adresse serveur vide."
     if "://" not in cleaned:
-        cleaned = f"http://{cleaned}"
+        cleaned = f"https://{cleaned}"
     parsed = urlparse(cleaned)
     if parsed.scheme not in ("http", "https"):
         return False, "", "Schéma non autorisé (http ou https uniquement)."

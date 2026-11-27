@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -85,6 +86,7 @@ def test_sync_and_apply_pilot_deb_profile_idempotent_and_rollback(step4_env):
         }],
     )
     assert ok_d is True
+    main_mod.RELEASE_REGISTRY.get_release(rel["id"])["artifacts"][0]["package"] = "lyux-profile-standard"
     assert main_mod.RELEASE_REGISTRY.sign_release(rel["id"])[0] is True
     assert main_mod.RELEASE_REGISTRY.publish_release(rel["id"])[0] is True
 
@@ -98,6 +100,9 @@ def test_sync_and_apply_pilot_deb_profile_idempotent_and_rollback(step4_env):
         resp = tc.get(path)
         assert resp.status_code == 200
         dest.write_bytes(resp.content)
+
+    trusted_keys_file = tmp_path / "trusted-public-keys.json"
+    trusted_keys_file.write_text(json.dumps(tc.get("/api/v1/client/public-keys").json()), encoding="utf-8")
 
     with patch.object(pa, "requests", adapter):
         res1 = pa.sync_and_apply_profile(
@@ -113,6 +118,7 @@ def test_sync_and_apply_pilot_deb_profile_idempotent_and_rollback(step4_env):
             active_dir=active_dir,
             backup_dir=backup_dir,
             sddm_conf_dir=sddm_dir,
+            trusted_keys_file=trusted_keys_file,
         )
         assert res1["ok"] is True
         assert res1["idempotent"] is False
@@ -133,6 +139,7 @@ def test_sync_and_apply_pilot_deb_profile_idempotent_and_rollback(step4_env):
             active_dir=active_dir,
             backup_dir=backup_dir,
             sddm_conf_dir=sddm_dir,
+            trusted_keys_file=trusted_keys_file,
         )
         assert res2["ok"] is True
         assert res2["idempotent"] is True
@@ -157,6 +164,7 @@ def test_sync_and_apply_pilot_deb_profile_idempotent_and_rollback(step4_env):
             }],
         )
         assert ok_d2 is True
+        main_mod.RELEASE_REGISTRY.get_release(rel2["id"])["artifacts"][0]["package"] = "lyux-profile-standard"
         assert main_mod.RELEASE_REGISTRY.sign_release(rel2["id"])[0] is True
         assert main_mod.RELEASE_REGISTRY.publish_release(rel2["id"])[0] is True
 
@@ -179,6 +187,7 @@ def test_sync_and_apply_pilot_deb_profile_idempotent_and_rollback(step4_env):
             active_dir=active_dir,
             backup_dir=backup_dir,
             sddm_conf_dir=sddm_dir,
+            trusted_keys_file=trusted_keys_file,
         )
         assert res3["ok"] is False
         assert res3["rolled_back"] is True

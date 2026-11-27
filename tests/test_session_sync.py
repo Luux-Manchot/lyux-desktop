@@ -61,7 +61,7 @@ def test_nss_user_sync_writes_extrausers_and_nsswitch(tmp_path, monkeypatch):
     import nss_user_sync
 
     state_file = tmp_path / "enrollment-state.json"
-    state_file.write_text(json.dumps({"server_url": "http://192.168.10.1:8000"}), encoding="utf-8")
+    state_file.write_text(json.dumps({"server_url": "https://192.168.10.1:8000"}), encoding="utf-8")
 
     nsswitch = tmp_path / "nsswitch.conf"
     nsswitch.write_text("passwd: files systemd\ngroup: files systemd\nshadow: files\n", encoding="utf-8")
@@ -106,7 +106,7 @@ def test_pam_auth_hook_authenticates_and_creates_home(tmp_path, monkeypatch):
     import pam_auth_hook
 
     state_file = tmp_path / "enrollment-state.json"
-    state_file.write_text(json.dumps({"server_url": "http://192.168.10.1:8000"}), encoding="utf-8")
+    state_file.write_text(json.dumps({"server_url": "https://192.168.10.1:8000"}), encoding="utf-8")
     extra_dir = tmp_path / "extrausers"
     home_root = tmp_path / "home"
 

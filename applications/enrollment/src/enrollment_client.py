@@ -12,7 +12,9 @@ import ipaddress
 import json
 import logging
 import os
+import shutil
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -342,6 +344,41 @@ def inspect_server(target_url: Optional[str] = None, timeout_sec: float = 2.5) -
     return {"state": last_status, "detail": last_detail, "ifaces": ifaces}
 
 
+def _atomic_write_text(path: Path, content: str, mode: int = 0o644) -> None:
+    """Écrit un fichier système atomiquement (mkstemp 0600, chmod, fsync, os.replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _install_pam_auth_hook(pam_auth_path: Path, hook_path: str) -> bool:
+    """Sauvegarde common-auth et ajoute le hook sans court-circuiter pam_unix."""
+    if not pam_auth_path.exists():
+        return False
+    content = pam_auth_path.read_text(encoding="utf-8")
+    if hook_path in content:
+        return False
+    backup_path = pam_auth_path.with_name(f"{pam_auth_path.name}.lyux.bak")
+    if not backup_path.exists():
+        shutil.copy2(pam_auth_path, backup_path)
+    hook_line = f"auth [success=ok default=ignore] pam_exec.so expose_authtok quiet {hook_path}\n"
+    _atomic_write_text(pam_auth_path, hook_line + content, mode=0o644)
+    return True
+
+
 def _configure_pam_nss_after_enrollment(server_url: str) -> None:
     """
     Configure PAM (common-auth + common-session), NSS (nsswitch.conf + extrausers)
@@ -358,14 +395,9 @@ def _configure_pam_nss_after_enrollment(server_url: str) -> None:
     PAM_SESSION_HOOK = "/opt/lyux/apps/enrollment/scripts/lyux-pam-session.sh"
     NSS_SYNC = "/opt/lyux/apps/enrollment/src/nss_user_sync.py"
 
-    # 1. PAM auth : ajouter notre hook si absent
+    # 1. PAM auth : ajouter notre hook si absent (sans sufficient)
     if PAM_AUTH.exists() and Path(PAM_AUTH_HOOK).exists():
-        content = PAM_AUTH.read_text(encoding="utf-8")
-        if PAM_AUTH_HOOK not in content:
-            PAM_AUTH.write_text(
-                f"auth sufficient pam_exec.so expose_authtok quiet {PAM_AUTH_HOOK}\n" + content,
-                encoding="utf-8",
-            )
+        if _install_pam_auth_hook(PAM_AUTH, PAM_AUTH_HOOK):
             logger.info("PAM common-auth : hook lyux-pam-auth.sh ajouté.")
 
     # 2. PAM session : ajouter notre hook si absent
