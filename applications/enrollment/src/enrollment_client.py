@@ -423,6 +423,35 @@ def _configure_pam_nss_after_enrollment(server_url: str) -> None:
         except Exception as exc:
             logger.warning("Sync NSS initiale échouée : %s", exc)
 
+    # 7. Montage NAS (/mnt/lyux-nas/homes) si activé côté serveur
+    try:
+        nas_enabled = True
+        share_path = "/srv/samba/homes"
+        try:
+            import requests as _req
+            r = _req.get(f"{server_url.rstrip('/')}/api/v1/system/settings", timeout=3)
+            if r.status_code == 200:
+                sdata = r.json()
+                nas_enabled = bool(sdata.get("nas_sync_enabled", True))
+                share_path = str(sdata.get("nas_share_path") or "/srv/samba/homes").strip()
+        except Exception:
+            pass
+        if nas_enabled:
+            from urllib.parse import urlparse as _urlparse
+            host = (_urlparse(server_url).hostname or "").strip()
+            nas_mount = Path("/mnt/lyux-nas/homes")
+            nas_mount.mkdir(parents=True, exist_ok=True)
+            fstab = Path("/etc/fstab")
+            if host and fstab.exists():
+                entry = f"{host}:{share_path} /mnt/lyux-nas/homes nfs rw,sync,nosuid,nodev,_netdev,nofail 0 0 # lyux-nas"
+                lines = [ln for ln in fstab.read_text(encoding="utf-8").splitlines() if "# lyux-nas" not in ln and "/mnt/lyux-nas/homes" not in ln]
+                lines.append(entry)
+                fstab.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                subprocess.run(["mount", str(nas_mount)], check=False)
+                logger.info("Montage NAS configuré dans /etc/fstab: %s:%s", host, share_path)
+    except Exception as exc:
+        logger.warning("Configuration montage NAS non bloquante échouée: %s", exc)
+
 
 def perform_enrollment(
     server_url: str,

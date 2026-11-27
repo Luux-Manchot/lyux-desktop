@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import sys
 from pathlib import Path
@@ -19,6 +20,39 @@ def _local_ip() -> str:
         return socket.gethostbyname(socket.gethostname())
     except OSError:
         return "127.0.0.1"
+
+
+def _populate_home_from_skel(home_dir: Path, uid: int, skel_dir: Path = Path("/etc/skel")) -> None:
+    """Copie le squelette /etc/skel dans un nouveau dossier personnel sans écraser l'existant."""
+    if not skel_dir.exists():
+        return
+    for root, dirs, files in os.walk(skel_dir):
+        rel = Path(root).relative_to(skel_dir)
+        target_dir = home_dir / rel
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if uid > 0 and hasattr(os, "chown"):
+            try:
+                os.chown(target_dir, uid, uid)
+            except OSError:
+                pass
+        for d in dirs:
+            sub = target_dir / d
+            sub.mkdir(parents=True, exist_ok=True)
+            if uid > 0 and hasattr(os, "chown"):
+                try:
+                    os.chown(sub, uid, uid)
+                except OSError:
+                    pass
+        for fname in files:
+            src_file = Path(root) / fname
+            dst_file = target_dir / fname
+            if not dst_file.exists():
+                try:
+                    shutil.copy2(src_file, dst_file)
+                    if uid > 0 and hasattr(os, "chown"):
+                        os.chown(dst_file, uid, uid)
+                except OSError:
+                    pass
 
 
 def authenticate_desktop_user(
@@ -78,6 +112,7 @@ def authenticate_desktop_user(
             os.chown(home_dir, uid, uid)
         except OSError:
             pass
+    _populate_home_from_skel(home_dir, uid)
     return True, "ok"
 
 

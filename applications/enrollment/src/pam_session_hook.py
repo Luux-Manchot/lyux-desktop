@@ -9,8 +9,17 @@ Hook PAM (pam_exec) pour les sessions utilisateur LyuX :
 import json
 import os
 import socket
+import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
+try:
+    import pwd
+except ImportError:
+    pwd = None
+
+import requests
 
 try:
     from session_sync import check_session_allowed, notify_session_logout, sync_delta_directory
@@ -33,6 +42,63 @@ def _get_server_url() -> str:
         except Exception:
             pass
     return ""
+
+
+def _fetch_server_nas_settings(server_url: str) -> tuple[bool, str]:
+    """Interroge le serveur pour savoir si la synchro NAS est activée et quel partage monter."""
+    if not server_url:
+        return True, "/srv/samba/homes"
+    try:
+        res = requests.get(f"{server_url.rstrip('/')}/api/v1/system/settings", timeout=2.0)
+        if res.status_code == 200:
+            data = res.json()
+            enabled = bool(data.get("nas_sync_enabled", True))
+            share_path = str(data.get("nas_share_path") or "/srv/samba/homes").strip()
+            return enabled, share_path
+    except Exception:
+        pass
+    return True, "/srv/samba/homes"
+
+
+def _ensure_nas_mounted(server_url: str, share_path: str, mount_base: Path = NAS_MOUNT_BASE) -> bool:
+    """Monte le partage NFS /homes du serveur sur /mnt/lyux-nas/homes si nécessaire."""
+    if mount_base != NAS_MOUNT_BASE:
+        return mount_base.exists()
+    if os.path.ismount(mount_base):
+        return True
+    mount_base.mkdir(parents=True, exist_ok=True)
+    host = (urlparse(server_url).hostname or "").strip() if server_url else ""
+    if host:
+        subprocess.run(
+            ["mount", "-t", "nfs", "-o", "rw,sync,nosuid,nodev,_netdev", f"{host}:{share_path}", str(mount_base)],
+            check=False,
+            capture_output=True,
+        )
+        if os.path.ismount(mount_base):
+            return True
+    subprocess.run(["mount", str(mount_base)], check=False, capture_output=True)
+    return os.path.ismount(mount_base)
+
+
+def _chown_user_tree(target_dir: Path, username: str) -> None:
+    """Attribue récursivement les fichiers synchronisés à l'utilisateur cible."""
+    if pwd is None or not hasattr(os, "chown"):
+        return
+    try:
+        pw = pwd.getpwnam(username)
+        uid, gid = pw.pw_uid, pw.pw_gid
+    except KeyError:
+        return
+    for root, dirs, files in os.walk(target_dir):
+        try:
+            os.chown(root, uid, gid)
+        except OSError:
+            pass
+        for name in dirs + files:
+            try:
+                os.chown(Path(root) / name, uid, gid)
+            except OSError:
+                pass
 
 
 def handle_pam_event(
@@ -59,18 +125,27 @@ def handle_pam_event(
             if not allowed and info.get("already_logged_in"):
                 print(info.get("detail", "Utilisateur déjà connecté sur un autre poste."), file=sys.stderr)
                 return 1
-        if n_home.exists():
-            for sub in SYNC_SUBDIRS:
-                if (n_home / sub).exists():
-                    sync_delta_directory(n_home / sub, l_home / sub)
+        nas_enabled, share_path = _fetch_server_nas_settings(srv) if nas_home is None else (True, "/srv/samba/homes")
+        if nas_enabled:
+            if nas_home is None:
+                _ensure_nas_mounted(srv, share_path)
+            if n_home.exists():
+                for sub in SYNC_SUBDIRS:
+                    if (n_home / sub).exists():
+                        sync_delta_directory(n_home / sub, l_home / sub)
+                        _chown_user_tree(l_home / sub, uname)
         return 0
 
     if pam_type == "close_session":
         total_synced = 0
-        if n_home.exists():
-            for sub in SYNC_SUBDIRS:
-                if (l_home / sub).exists():
-                    total_synced += len(sync_delta_directory(l_home / sub, n_home / sub))
+        nas_enabled, share_path = _fetch_server_nas_settings(srv) if nas_home is None else (True, "/srv/samba/homes")
+        if nas_enabled:
+            if nas_home is None:
+                _ensure_nas_mounted(srv, share_path)
+            if n_home.exists():
+                for sub in SYNC_SUBDIRS:
+                    if (l_home / sub).exists():
+                        total_synced += len(sync_delta_directory(l_home / sub, n_home / sub))
         if srv:
             notify_session_logout(srv, uname, host, files_synced=total_synced)
         return 0
