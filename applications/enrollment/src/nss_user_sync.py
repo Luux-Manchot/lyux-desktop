@@ -115,7 +115,14 @@ def sync_nss_users(
     except (OSError, URLError, ValueError):
         return -1
     ensure_nsswitch_extrausers(nsswitch_path)
-    return write_extrausers_files(users, extrausers_dir)
+    count = write_extrausers_files(users, extrausers_dir)
+    if state_path == DEFAULT_STATE_PATH:
+        try:
+            from app_policy_sync import sync_client_packages
+            sync_client_packages(server_url)
+        except Exception:
+            pass
+    return count
 
 
 if __name__ == "__main__":
