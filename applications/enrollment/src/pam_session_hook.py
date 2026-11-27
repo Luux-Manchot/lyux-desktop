@@ -26,6 +26,14 @@ try:
 except ImportError:
     from .session_sync import check_session_allowed, notify_session_logout, sync_delta_directory
 
+try:
+    from app_policy_sync import apply_role_app_restrictions
+except ImportError:
+    try:
+        from .app_policy_sync import apply_role_app_restrictions
+    except ImportError:
+        apply_role_app_restrictions = None
+
 STATE_FILE = Path(os.getenv("LYUX_ENROLLMENT_STATE", "/var/lib/lyux/enrollment-state.json"))
 NAS_MOUNT_BASE = Path(os.getenv("LYUX_NAS_MOUNT", "/mnt/lyux-nas/homes"))
 SYNC_SUBDIRS = ("Documents", "Bureau", "Projets", ".config")
@@ -120,11 +128,14 @@ def handle_pam_event(
     n_home = nas_home or (NAS_MOUNT_BASE / uname)
 
     if pam_type == "open_session":
+        user_role = "eleve"
         if srv:
             allowed, info = check_session_allowed(srv, uname, host)
             if not allowed and info.get("already_logged_in"):
                 print(info.get("detail", "Utilisateur déjà connecté sur un autre poste."), file=sys.stderr)
                 return 1
+            if isinstance(info, dict) and info.get("role"):
+                user_role = str(info["role"])
         nas_enabled, share_path = _fetch_server_nas_settings(srv) if nas_home is None else (True, "/srv/samba/homes")
         if nas_enabled:
             if nas_home is None:
@@ -134,6 +145,11 @@ def handle_pam_event(
                     if (n_home / sub).exists():
                         sync_delta_directory(n_home / sub, l_home / sub)
                         _chown_user_tree(l_home / sub, uname)
+        if srv and apply_role_app_restrictions is not None and nas_home is None:
+            try:
+                apply_role_app_restrictions(srv, uname, user_role, l_home)
+            except Exception:
+                pass
         return 0
 
     if pam_type == "close_session":
